@@ -96,7 +96,7 @@ def grpe_flash_kernel(
     min_te
         Shortest possible echo time.
     min_tr
-        Shortest possible echo time.
+        Shortest possible repetition time.
 
     """
     spoke_angle = np.pi * 0.618034
