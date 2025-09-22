@@ -25,7 +25,7 @@ def grpe_flash_kernel(
     n_rpe_spokes: int,
     readout_oversampling: float,
     partial_fourier_factor: float,
-    n_dummy_excitations: int,
+    n_dummy_spokes: int,
     gx_pre_duration: float,
     gx_flat_time: float,
     rf_duration: float,
@@ -66,8 +66,8 @@ def grpe_flash_kernel(
         Readout oversampling factor, commonly 2. This reduces aliasing artifacts.
     partial_fourier_factor
         Partial Fourier factor along RPE lines (between 0.5 and 1).
-    n_dummy_excitations
-        Number of dummy excitations before data acquisition to ensure steady state.
+    n_dummy_spokes
+        Number of dummy RPE spokes before data acquisition to ensure steady state.
     gx_pre_duration
         Duration of readout pre-winder gradient (in seconds)
     gx_flat_time
@@ -142,8 +142,6 @@ def grpe_flash_kernel(
         enc_steps_pe_interleaved.append(enc_steps_pe[step :: n_rpe_points // n_rpe_points_per_shot])
     enc_steps_pe = np.concatenate(enc_steps_pe_interleaved)
 
-    enc_steps_se = np.arange(0, n_rpe_spokes)
-
     # create spoiler gradients
     gx_spoil = pp.make_trapezoid(channel='x', system=system, area=gx_spoil_area, duration=gx_spoil_duration)
 
@@ -154,7 +152,8 @@ def grpe_flash_kernel(
         gzr_gx_dur = pp.calc_duration(gzr) + pp.calc_duration(gx_pre)  # gzr and gx_pre are applied sequentially
 
     min_te = (
-        pp.calc_duration(gz) / 2  # half duration of rf pulse
+        rf.shape_dur / 2  # time from center to end of RF pulse
+        + max(rf.ringdown_time, gz.fall_time)  # RF ringdown time or gradient fall time
         + gzr_gx_dur  # slice selection re-phasing gradient and readout pre-winder
         + gx.delay  # potential delay of readout gradient
         + gx.rise_time  # rise time of readout gradient
@@ -213,14 +212,13 @@ def grpe_flash_kernel(
     seq.add_block(pp.make_label(label='LIN', type='SET', value=0), pp.make_label(label='SLC', type='SET', value=0))
 
     # Define sequence blocks
-    for se in enc_steps_se:
-        se_label = pp.make_label(type='SET', label='PAR', value=int(se))
-        for pe_index in range(-n_dummy_excitations, n_rpe_points):
+    for se_index in np.arange(-n_dummy_spokes, n_rpe_spokes):
+        se_label = pp.make_label(type='SET', label='PAR', value=int(se_index))
+        for pe in enc_steps_pe:
             # if use_fat_sat and np.mod(pe, n_rpe_points) == 0:
             #    # add fat-sat pulse and gradient
             #    seq.add_block(rf_fs, gz_fs)
 
-            pe = enc_steps_pe[pe_index] if pe_index >= 0 else 0
             pe_label = pp.make_label(type='SET', label='LIN', value=int(pe))
 
             # set rf pulse properties and add rf pulse block event
@@ -238,7 +236,7 @@ def grpe_flash_kernel(
             # area of phase encoding gradient
             current_phase_area = phase_areas[int(pe)]
             if np.abs(current_phase_area) > 1e-5:  # do not shift k-space center for respiratory navigator calculation
-                current_phase_area += rpe_radial_shift[int(np.mod(se, len(rpe_radial_shift)))] * delta_ky
+                current_phase_area += rpe_radial_shift[int(np.mod(se_index, len(rpe_radial_shift)))] * delta_ky
 
             # phase encoding along pe
             gy_pre = pp.make_trapezoid(
@@ -249,7 +247,7 @@ def grpe_flash_kernel(
             )
 
             # calculate rotated phase encoding gradient
-            rotation_angle_rad = spoke_angle * se
+            rotation_angle_rad = spoke_angle * se_index
             gy_pre_rotated = rotate(gy_pre, angle=rotation_angle_rad, axis='x')
             gy_pre = gy_pre_rotated[0]
             if len(gy_pre_rotated) == 2:
@@ -279,8 +277,10 @@ def grpe_flash_kernel(
                 seq.add_block(pp.make_delay(te_delay))
 
             # add readout gradient and ADC
-            if pe_index >= 0:
+            if se_index >= 0:
                 seq.add_block(gx, adc)
+            else:
+                seq.add_block(pp.make_delay(pp.calc_duration(gx, adc)))
 
             # add re-winder and spoiler gradients
             gy_pre.amplitude = -gy_pre.amplitude
@@ -291,7 +291,7 @@ def grpe_flash_kernel(
             if tr_delay > 0:
                 seq.add_block(pp.make_delay(tr_delay))
 
-            if mrd_header_file and pe_index >= 0:
+            if mrd_header_file and se_index >= 0:
                 # add acquisitions to metadata
                 k0_trajectory = np.linspace(
                     -n_readout_with_oversampling // 2,
@@ -381,7 +381,7 @@ def main(
     rf_apodization = 0.5  # apodization factor of rf excitation pulse
     readout_oversampling = 2  # readout oversampling factor, commonly 2. This reduces aliasing artifacts.
 
-    n_dummy_excitations = 40  # number of dummy excitations before data acquisition to ensure steady state
+    n_dummy_spokes = 2  # number of dummy RPE spokes before data acquisition to ensure steady state
 
     # define spoiling
     gx_spoil_duration = 1.9e-3  # duration of spoiler gradient [s]
@@ -412,7 +412,7 @@ def main(
         n_rpe_spokes=n_rpe_spokes,
         readout_oversampling=readout_oversampling,
         partial_fourier_factor=partial_fourier_factor,
-        n_dummy_excitations=n_dummy_excitations,
+        n_dummy_spokes=n_dummy_spokes,
         gx_pre_duration=gx_pre_duration,
         gx_flat_time=gx_flat_time,
         rf_duration=rf_duration,
@@ -451,7 +451,7 @@ def main(
     seq.write(str(output_path / filename), create_signature=True)
 
     if show_plots:
-        seq.plot(time_range=(0, 10 * (tr or min_tr)))
+        seq.plot(time_range=(0, (n_dummy_spokes * n_rpe_points + 20) * (tr or min_tr)))
 
     return seq
 

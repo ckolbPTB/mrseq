@@ -3,7 +3,7 @@
 import pytest
 from mrseq.scripts.grpe_flash import main as create_seq
 
-EXPECTED_DUR = 9.277439999999494  # defined 2025-02-03
+EXPECTED_DUR = 7.96752  # defined 2025-09-22
 
 
 def test_default_seq_duration(system_defaults):
@@ -23,19 +23,6 @@ def test_seq_creation_error_on_short_tr(system_defaults):
     """Test if error is raised on too short repetition time."""
     with pytest.raises(ValueError):
         create_seq(system=system_defaults, tr=5e-3, show_plots=False)
-
-
-def test_seq_duration_double_number_of_rpe_spokes(system_defaults):
-    """Test if sequence duration is as expected."""
-    seq = create_seq(
-        system=system_defaults,
-        n_rpe_spokes=32,  # default 16
-        show_plots=False,
-        test_report=False,
-        timing_check=False,
-    )
-    duration = seq.duration()[0]
-    assert duration / 2 == pytest.approx(EXPECTED_DUR)
 
 
 def test_seq_duration_vary_params_without_effect(system_defaults):
