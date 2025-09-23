@@ -9,6 +9,9 @@ from pypulseq.rotate import rotate
 
 from mrseq.utils import round_to_raster
 from mrseq.utils import sys_defaults
+from mrseq.utils.create_ismrmrd_header import Fov
+from mrseq.utils.create_ismrmrd_header import Limits
+from mrseq.utils.create_ismrmrd_header import MatrixSize
 from mrseq.utils.create_ismrmrd_header import create_header
 
 
@@ -122,7 +125,7 @@ def grpe_flash_kernel(
     delta_k = 1 / fov_x
     gx = pp.make_trapezoid(channel='x', flat_area=n_readout * delta_k, flat_time=gx_flat_time, system=system)
     n_readout_with_oversampling = int(n_readout * readout_oversampling)
-    n_readout_with_oversampling = n_readout_with_oversampling + np.mod(n_readout_with_oversampling, 2)  # make even
+    n_readout_with_oversampling = int(n_readout_with_oversampling + np.mod(n_readout_with_oversampling, 2))  # make even
     adc = pp.make_adc(num_samples=n_readout_with_oversampling, duration=gx.flat_time, delay=gx.rise_time, system=system)
 
     # create frequency encoding pre- and re-winder gradient
@@ -193,12 +196,14 @@ def grpe_flash_kernel(
     if mrd_header_file:
         hdr = create_header(
             traj_type='other',
-            fov=fov_x,
-            res=fov_x / n_readout,
-            slice_thickness=fov_z,
-            dt=adc.dwell,
-            n_k1=n_rpe_points,
-            n_k2=n_rpe_spokes,
+            encoding_fov=Fov(x=fov_x * readout_oversampling, y=fov_y, z=fov_y),
+            recon_fov=Fov(x=fov_x, y=fov_y, z=fov_y),
+            encoding_matrix=MatrixSize(n_x=n_readout_with_oversampling, n_y=n_rpe_points, n_z=n_rpe_points),
+            recon_matrix=MatrixSize(n_x=n_readout, n_y=n_rpe_points, n_z=n_rpe_points),
+            dwell_time=adc.dwell,
+            slice_limits=Limits(min=0, max=0, center=0),
+            k1_limits=Limits(min=0, max=n_rpe_points, center=0),
+            k2_limits=Limits(min=0, max=n_rpe_spokes, center=0),
         )
 
         # write header to file
