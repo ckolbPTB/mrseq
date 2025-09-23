@@ -7,6 +7,7 @@ import numpy as np
 import pypulseq as pp
 from pypulseq.rotate import rotate
 
+from mrseq.preparations.fat_sat import add_fat_sat
 from mrseq.utils import round_to_raster
 from mrseq.utils import sys_defaults
 from mrseq.utils.create_ismrmrd_header import create_header
@@ -26,6 +27,7 @@ def grpe_flash_kernel(
     readout_oversampling: float,
     partial_fourier_factor: float,
     n_dummy_spokes: int,
+    fat_saturation: bool,
     gx_pre_duration: float,
     gx_flat_time: float,
     rf_duration: float,
@@ -68,6 +70,8 @@ def grpe_flash_kernel(
         Partial Fourier factor along RPE lines (between 0.5 and 1).
     n_dummy_spokes
         Number of dummy RPE spokes before data acquisition to ensure steady state.
+    fat_saturation
+        Toggles fat saturation pulse prior to each shot.
     gx_pre_duration
         Duration of readout pre-winder gradient (in seconds)
     gx_flat_time
@@ -223,9 +227,9 @@ def grpe_flash_kernel(
     for se_index in np.arange(-n_dummy_spokes, n_rpe_spokes):
         se_label = pp.make_label(type='SET', label='PAR', value=int(se_index))
         for pe in enc_steps_pe:
-            # if use_fat_sat and np.mod(pe, n_rpe_points) == 0:
-            #    # add fat-sat pulse and gradient
-            #    seq.add_block(rf_fs, gz_fs)
+            if fat_saturation and np.mod(pe, n_rpe_points) == 0:
+                # add fat-sat pulse and gradient
+                seq, _ = add_fat_sat(seq=seq, system=system)
 
             pe_label = pp.make_label(type='SET', label='LIN', value=int(pe))
 
@@ -336,6 +340,7 @@ def main(
     n_rpe_points_per_shot: int = 8,
     n_rpe_spokes: int = 16,
     partial_fourier_factor: float = 0.7,
+    fat_saturation: bool = True,
     show_plots: bool = True,
     test_report: bool = True,
     timing_check: bool = True,
@@ -367,6 +372,8 @@ def main(
         Number of radial phase encoding spokes (number of RPE lines).
     partial_fourier_factor
         Partial Fourier factor along RPE lines (between 0.5 and 1).
+    fat_saturation
+        Toggles fat saturation pulse prior to each shot.
     show_plots
         Toggles sequence plot.
     test_report
@@ -421,6 +428,7 @@ def main(
         readout_oversampling=readout_oversampling,
         partial_fourier_factor=partial_fourier_factor,
         n_dummy_spokes=n_dummy_spokes,
+        fat_saturation=fat_saturation,
         gx_pre_duration=gx_pre_duration,
         gx_flat_time=gx_flat_time,
         rf_duration=rf_duration,
