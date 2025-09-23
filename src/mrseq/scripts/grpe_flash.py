@@ -138,7 +138,7 @@ def grpe_flash_kernel(
     n_rpe_points_with_partial_fourier = int(
         ((n_rpe_points * partial_fourier_factor) // n_rpe_points_per_shot) * n_rpe_points_per_shot
     )
-    n_shots_per_rpe_spoke = n_rpe_points // n_rpe_points_per_shot
+    n_shots_per_rpe_spoke = n_rpe_points_with_partial_fourier // n_rpe_points_per_shot
     print(
         f'Number of phase encoding points {n_rpe_points_with_partial_fourier}',
         f'with partial Fourier factor {partial_fourier_factor}',
@@ -195,6 +195,9 @@ def grpe_flash_kernel(
     print(f'\nCurrent echo time = {(min_te + te_delay) * 1000:.2f} ms')
     print(f'Current repetition time = {(current_min_tr + tr_delay) * 1000:.2f} ms')
 
+    if fat_saturation:
+        fat_sat_block, _ = add_fat_sat(seq=None, system=system)
+
     # choose initial rf phase offset
     rf_phase = 0
     rf_inc = 0
@@ -226,100 +229,105 @@ def grpe_flash_kernel(
     # Define sequence blocks
     for se_index in np.arange(-n_dummy_spokes, n_rpe_spokes):
         se_label = pp.make_label(type='SET', label='PAR', value=int(se_index))
-        for pe in enc_steps_pe:
-            if fat_saturation and np.mod(pe, n_rpe_points) == 0:
-                # add fat-sat pulse and gradient
-                seq, _ = add_fat_sat(seq=seq, system=system)
+        for shot_index in range(n_shots_per_rpe_spoke):
+            # add fat saturation block
+            if fat_saturation:
+                for idx in fat_sat_block.block_events:
+                    seq.add_block(fat_sat_block.get_block(idx))
 
-            pe_label = pp.make_label(type='SET', label='LIN', value=int(pe))
+            for pe_index in range(n_rpe_points_per_shot):
+                pe = enc_steps_pe[shot_index * n_rpe_points_per_shot + pe_index]
+                pe_label = pp.make_label(type='SET', label='LIN', value=int(pe))
 
-            # set rf pulse properties and add rf pulse block event
-            if rf_spoiling_phase_increment > 0:
-                rf.phase_offset = rf_phase / 180 * np.pi
-                adc.phase_offset = rf_phase / 180 * np.pi
+                # set rf pulse properties and add rf pulse block event
+                if rf_spoiling_phase_increment > 0:
+                    rf.phase_offset = rf_phase / 180 * np.pi
+                    adc.phase_offset = rf_phase / 180 * np.pi
 
-            # add rf pulse
-            seq.add_block(rf, gz)
+                # add rf pulse
+                seq.add_block(rf, gz)
 
-            # update rf pulse properties for the next loop
-            rf_inc = divmod(rf_inc + rf_spoiling_phase_increment, 360.0)[1]
-            rf_phase = divmod(rf_phase + rf_inc, 360.0)[1]
+                # update rf pulse properties for the next loop
+                rf_inc = divmod(rf_inc + rf_spoiling_phase_increment, 360.0)[1]
+                rf_phase = divmod(rf_phase + rf_inc, 360.0)[1]
 
-            # area of phase encoding gradient
-            current_phase_area = phase_areas[int(pe)]
-            if np.abs(current_phase_area) > 1e-5:  # do not shift k-space center for respiratory navigator calculation
-                current_phase_area += rpe_radial_shift[int(np.mod(se_index, len(rpe_radial_shift)))] * delta_ky
+                # area of phase encoding gradient
+                current_phase_area = phase_areas[int(pe)]
+                if (
+                    np.abs(current_phase_area) > 1e-5
+                ):  # do not shift k-space center for respiratory navigator calculation
+                    current_phase_area += rpe_radial_shift[int(np.mod(se_index, len(rpe_radial_shift)))] * delta_ky
 
-            # phase encoding along pe
-            gy_pre = pp.make_trapezoid(
-                channel='y',
-                area=current_phase_area,
-                duration=pp.calc_duration(gx_pre),
-                system=system,
-            )
-
-            # calculate rotated phase encoding gradient
-            rotation_angle_rad = spoke_angle * se_index
-            gy_pre_rotated = rotate(gy_pre, angle=rotation_angle_rad, axis='x')
-            gy_pre = gy_pre_rotated[0]
-            if len(gy_pre_rotated) == 2:
-                gz_pre = gy_pre_rotated[1]
-            else:
-                gz_pre = pp.make_trapezoid(
-                    channel='z',
-                    area=0,
+                # phase encoding along pe
+                gy_pre = pp.make_trapezoid(
+                    channel='y',
+                    area=current_phase_area,
                     duration=pp.calc_duration(gx_pre),
                     system=system,
                 )
-            assert gy_pre.channel == 'y' and gz_pre.channel == 'z'
 
-            # combine slice rephaser and slice encoding gradient
-            gz_r_pre = pp.make_trapezoid(
-                channel='z',
-                area=gz_pre.area + gzr.area,
-                duration=pp.calc_duration(gx_pre),
-                system=system,
-            )
+                # calculate rotated phase encoding gradient
+                rotation_angle_rad = spoke_angle * se_index
+                gy_pre_rotated = rotate(gy_pre, angle=rotation_angle_rad, axis='x')
+                gy_pre = gy_pre_rotated[0]
+                if len(gy_pre_rotated) == 2:
+                    gz_pre = gy_pre_rotated[1]
+                else:
+                    gz_pre = pp.make_trapezoid(
+                        channel='z',
+                        area=0,
+                        duration=pp.calc_duration(gx_pre),
+                        system=system,
+                    )
+                assert gy_pre.channel == 'y' and gz_pre.channel == 'z'
 
-            label_contents = [pe_label, se_label]
-            seq.add_block(gx_pre, gy_pre, gz_r_pre, *label_contents)
-
-            # add delay due to TE
-            if te_delay > 0:
-                seq.add_block(pp.make_delay(te_delay))
-
-            # add readout gradient and ADC
-            if se_index >= 0:
-                seq.add_block(gx, adc)
-            else:
-                seq.add_block(pp.make_delay(pp.calc_duration(gx, adc)))
-
-            # add re-winder and spoiler gradients
-            gy_pre.amplitude = -gy_pre.amplitude
-            gz_pre.amplitude = -gz_pre.amplitude
-            seq.add_block(gx_spoil, gy_pre, gz_pre)
-
-            # add delay in case TR > min_TR
-            if tr_delay > 0:
-                seq.add_block(pp.make_delay(tr_delay))
-
-            if mrd_header_file and se_index >= 0:
-                # add acquisitions to metadata
-                k0_trajectory = np.linspace(
-                    -n_readout_with_oversampling // 2,
-                    (n_readout_with_oversampling // 2) - 1,
-                    n_readout_with_oversampling,
+                # combine slice rephaser and slice encoding gradient
+                gz_r_pre = pp.make_trapezoid(
+                    channel='z',
+                    area=gz_pre.area + gzr.area,
+                    duration=pp.calc_duration(gx_pre),
+                    system=system,
                 )
-                grpe_trajectory = np.zeros((n_readout_with_oversampling, 3), dtype=np.float32)
 
-                grpe_trajectory[:, 0] = k0_trajectory
-                grpe_trajectory[:, 1] = pe * np.cos(rotation_angle_rad)
-                grpe_trajectory[:, 2] = pe * np.sin(rotation_angle_rad)
+                label_contents = [pe_label, se_label]
+                seq.add_block(gx_pre, gy_pre, gz_r_pre, *label_contents)
 
-                acq = ismrmrd.Acquisition()
-                acq.resize(trajectory_dimensions=3, number_of_samples=adc.num_samples)
-                acq.traj[:] = grpe_trajectory
-                prot.append_acquisition(acq)
+                # add delay due to TE
+                if te_delay > 0:
+                    seq.add_block(pp.make_delay(te_delay))
+
+                # add readout gradient and ADC
+                if se_index >= 0:
+                    seq.add_block(gx, adc)
+                else:
+                    seq.add_block(pp.make_delay(pp.calc_duration(gx, adc)))
+
+                # add re-winder and spoiler gradients
+                gy_pre.amplitude = -gy_pre.amplitude
+                gz_pre.amplitude = -gz_pre.amplitude
+                seq.add_block(gx_spoil, gy_pre, gz_pre)
+
+                # add delay in case TR > min_TR
+                if tr_delay > 0:
+                    seq.add_block(pp.make_delay(tr_delay))
+
+                if mrd_header_file and se_index >= 0:
+                    # add acquisitions to metadata
+                    k0_trajectory = np.linspace(
+                        -n_readout_with_oversampling // 2,
+                        (n_readout_with_oversampling // 2) - 1,
+                        n_readout_with_oversampling,
+                    )
+                    grpe_trajectory = np.zeros((n_readout_with_oversampling, 3), dtype=np.float32)
+
+                    grpe_trajectory[:, 0] = k0_trajectory
+                    grpe_trajectory[:, 1] = pe * np.cos(rotation_angle_rad)
+                    grpe_trajectory[:, 2] = pe * np.sin(rotation_angle_rad)
+
+                    acq = ismrmrd.Acquisition()
+                    acq.resize(trajectory_dimensions=3, number_of_samples=adc.num_samples)
+                    acq.traj[:] = grpe_trajectory
+                    prot.append_acquisition(acq)
 
     # close ISMRMRD file
     if mrd_header_file:
@@ -340,7 +348,7 @@ def main(
     n_rpe_points_per_shot: int = 8,
     n_rpe_spokes: int = 16,
     partial_fourier_factor: float = 0.7,
-    fat_saturation: bool = True,
+    fat_saturation: bool = False,
     show_plots: bool = True,
     test_report: bool = True,
     timing_check: bool = True,
