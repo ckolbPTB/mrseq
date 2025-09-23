@@ -131,17 +131,23 @@ def grpe_flash_kernel(
 
     # calculate gradient areas for phase encoding along each RPE line in a low-high order
     delta_ky = 1 / fov_y
-    n_rpe_points = int(((n_rpe_points * partial_fourier_factor) // n_rpe_points_per_shot) * n_rpe_points_per_shot)
-    print(f'Number of phase encoding points {n_rpe_points} with partial Fourier factor {partial_fourier_factor}')
-    enc_steps_pe = np.arange(0, n_rpe_points)
+    n_rpe_points_with_partial_fourier = int(
+        ((n_rpe_points * partial_fourier_factor) // n_rpe_points_per_shot) * n_rpe_points_per_shot
+    )
+    n_shots_per_rpe_spoke = n_rpe_points // n_rpe_points_per_shot
+    print(
+        f'Number of phase encoding points {n_rpe_points_with_partial_fourier}',
+        f'with partial Fourier factor {partial_fourier_factor}',
+    )
+    enc_steps_pe = np.arange(0, n_rpe_points_with_partial_fourier)
     phase_areas = (enc_steps_pe - n_rpe_points / 2) * delta_ky
     centric_idx = np.argsort(np.abs(phase_areas), kind='stable')
     enc_steps_pe = enc_steps_pe[centric_idx]
 
     # Interleave shots
     enc_steps_pe_interleaved = []
-    for step in range(n_rpe_points // n_rpe_points_per_shot):
-        enc_steps_pe_interleaved.append(enc_steps_pe[step :: n_rpe_points // n_rpe_points_per_shot])
+    for step in range(n_shots_per_rpe_spoke):
+        enc_steps_pe_interleaved.append(enc_steps_pe[step::n_shots_per_rpe_spoke])
     enc_steps_pe = np.concatenate(enc_steps_pe_interleaved)
 
     # create spoiler gradients
