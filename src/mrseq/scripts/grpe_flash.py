@@ -106,6 +106,8 @@ def grpe_flash_kernel(
     spoke_angle = np.pi * 0.618034
     rpe_radial_shift = [0, 0.5, 0.25, 0.75]
 
+    n_echoes = 3
+
     # create PyPulseq Sequence object and set system limits
     seq = pp.Sequence(system=system)
 
@@ -131,7 +133,9 @@ def grpe_flash_kernel(
 
     # create frequency encoding pre- and re-winder gradient
     gx_pre = pp.make_trapezoid(channel='x', area=-gx.area / 2 - delta_k / 2, duration=gx_pre_duration, system=system)
-    k0_center_id = np.where((np.arange(n_readout) - n_readout / 2) * delta_k == 0)[0][0]
+    k0_center_id = np.where((np.arange(n_readout_with_oversampling) - n_readout_with_oversampling / 2) * delta_k == 0)[
+        0
+    ][0]
 
     # calculate gradient areas for phase encoding along each RPE line in a low-high order
     delta_ky = 1 / fov_y
@@ -222,9 +226,12 @@ def grpe_flash_kernel(
     # seq.add_block(pp.make_label(label='LIN', type='SET', value=0), pp.make_label(label='SLC', type='SET', value=0))
     # seq.add_block(adc, pp.make_label(label='NOISE', type='SET', value=True))
     # seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))
+    # seq.add_block(pp.make_delay(system.rf_dead_time))
 
-    # init labels (still required - missing SET label will prohibit the sequence from running)
-    seq.add_block(pp.make_label(label='LIN', type='SET', value=0), pp.make_label(label='SLC', type='SET', value=0))
+    # if mrd_header_file:
+    #    acq = ismrmrd.Acquisition()
+    #    acq.resize(trajectory_dimensions=2, number_of_samples=adc.num_samples)
+    #    prot.append_acquisition(acq)
 
     # Define sequence blocks
     for se_index in np.arange(-n_dummy_spokes, n_rpe_spokes):
@@ -236,8 +243,8 @@ def grpe_flash_kernel(
                     seq.add_block(fat_sat_block.get_block(idx))
 
             for pe_index in range(n_rpe_points_per_shot):
-                pe = enc_steps_pe[shot_index * n_rpe_points_per_shot + pe_index]
-                pe_label = pp.make_label(type='SET', label='LIN', value=int(pe))
+                pe = int(enc_steps_pe[shot_index * n_rpe_points_per_shot + pe_index])
+                pe_label = pp.make_label(type='SET', label='LIN', value=pe)
 
                 # set rf pulse properties and add rf pulse block event
                 if rf_spoiling_phase_increment > 0:
@@ -252,16 +259,17 @@ def grpe_flash_kernel(
                 rf_phase = divmod(rf_phase + rf_inc, 360.0)[1]
 
                 # area of phase encoding gradient
-                current_phase_area = phase_areas[int(pe)]
-                if (
-                    np.abs(current_phase_area) > 1e-5
-                ):  # do not shift k-space center for respiratory navigator calculation
-                    current_phase_area += rpe_radial_shift[int(np.mod(se_index, len(rpe_radial_shift)))] * delta_ky
+                current_phase_area = phase_areas[pe]
+                # do not shift k-space center for respiratory navigator calculation
+                if np.abs(current_phase_area) > 1e-5:
+                    pe_shift = rpe_radial_shift[int(np.mod(se_index, len(rpe_radial_shift)))]
+                else:
+                    pe_shift = 0.0
 
                 # phase encoding along pe
                 gy_pre = pp.make_trapezoid(
                     channel='y',
-                    area=current_phase_area,
+                    area=current_phase_area + pe_shift * delta_ky,
                     duration=pp.calc_duration(gx_pre),
                     system=system,
                 )
@@ -297,10 +305,15 @@ def grpe_flash_kernel(
                     seq.add_block(pp.make_delay(te_delay))
 
                 # add readout gradient and ADC
-                if se_index >= 0:
-                    seq.add_block(gx, adc)
-                else:
-                    seq.add_block(pp.make_delay(pp.calc_duration(gx, adc)))
+                for echo_ in range(n_echoes):
+                    if se_index >= 0:
+                        gx_sign = (-1) ** echo_
+                        labels = []
+                        labels.append(pp.make_label(type='SET', label='REV', value=gx_sign == -1))
+                        labels.append(pp.make_label(type='SET', label='ECO', value=echo_))
+                        seq.add_block(pp.scale_grad(gx, gx_sign), adc, *labels)
+                    else:
+                        seq.add_block(pp.make_delay(pp.calc_duration(gx, adc)))
 
                 # add re-winder and spoiler gradients
                 gy_pre.amplitude = -gy_pre.amplitude
@@ -320,14 +333,16 @@ def grpe_flash_kernel(
                     )
                     grpe_trajectory = np.zeros((n_readout_with_oversampling, 3), dtype=np.float32)
 
-                    grpe_trajectory[:, 0] = k0_trajectory
-                    grpe_trajectory[:, 1] = pe * np.cos(rotation_angle_rad)
-                    grpe_trajectory[:, 2] = pe * np.sin(rotation_angle_rad)
+                    for echo_ in range(n_echoes):
+                        gx_sign = (-1) ** echo_
+                        grpe_trajectory[:, 0] = k0_trajectory[::gx_sign]
+                        grpe_trajectory[:, 1] = (pe - n_rpe_points / 2 + pe_shift) * np.cos(rotation_angle_rad)
+                        grpe_trajectory[:, 2] = (pe - n_rpe_points / 2 + pe_shift) * np.sin(rotation_angle_rad)
 
-                    acq = ismrmrd.Acquisition()
-                    acq.resize(trajectory_dimensions=3, number_of_samples=adc.num_samples)
-                    acq.traj[:] = grpe_trajectory
-                    prot.append_acquisition(acq)
+                        acq = ismrmrd.Acquisition()
+                        acq.resize(trajectory_dimensions=3, number_of_samples=adc.num_samples)
+                        acq.traj[:] = grpe_trajectory
+                        prot.append_acquisition(acq)
 
     # close ISMRMRD file
     if mrd_header_file:
@@ -413,14 +428,16 @@ def main(
 
     # define sequence filename
     filename = f'{Path(__file__).stem}_fov{int(fov_x * 1000)}_{int(fov_y * 1000)}_{int(fov_z * 1000)}mm_'
-    filename += f'{n_readout}_{n_rpe_points}_{n_rpe_spokes}_3d'
+    filename += f'{n_readout}_{n_rpe_points}_{n_rpe_spokes}_3ne'
+    if fat_saturation:
+        filename += '_fatsat'
 
     output_path = Path.cwd() / 'output'
     output_path.mkdir(parents=True, exist_ok=True)
 
     # delete existing header file
-    if (output_path / Path(filename + '.mrd')).exists():
-        (output_path / Path(filename + '.mrd')).unlink()
+    if (output_path / Path(filename + '_header.h5')).exists():
+        (output_path / Path(filename + '_header.h5')).unlink()
 
     seq, min_te, min_tr = grpe_flash_kernel(
         system=system,
@@ -446,7 +463,7 @@ def main(
         rf_spoiling_phase_increment=rf_spoiling_phase_increment,
         gx_spoil_duration=gx_spoil_duration,
         gx_spoil_area=gx_spoil_area,
-        mrd_header_file=output_path / Path(filename + '.mrd'),
+        mrd_header_file=output_path / Path(filename + '_header.h5'),
     )
 
     # check timing of the sequence
