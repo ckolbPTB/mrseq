@@ -9,6 +9,7 @@ from pypulseq.rotate import rotate
 
 from mrseq.preparations.fat_sat import add_fat_sat
 from mrseq.utils import MultiEchoAcquisition
+from mrseq.utils import find_gx_flat_time_on_adc_raster
 from mrseq.utils import round_to_raster
 from mrseq.utils import sys_defaults
 from mrseq.utils.create_ismrmrd_header import create_header
@@ -370,6 +371,7 @@ def main(
     partial_echo_factor: float = 0.7,
     partial_fourier_factor: float = 0.7,
     fat_saturation: bool = False,
+    receiver_bandwidth_per_pixel: float = 1200,  # Hz/pixel
     show_plots: bool = True,
     test_report: bool = True,
     timing_check: bool = True,
@@ -403,6 +405,8 @@ def main(
         Partial Fourier factor along RPE lines (between 0.5 and 1).
     fat_saturation
         Toggles fat saturation pulse prior to each shot.
+    receiver_bandwidth_per_pixel
+        Desired receiver bandwidth per pixel (in Hz/pixel). This is used to calculate the readout duration.
     show_plots
         Toggles sequence plot.
     test_report
@@ -413,11 +417,6 @@ def main(
     if system is None:
         system = sys_defaults
 
-    # define ADC and gradient timing
-    adc_dwell = system.grad_raster_time
-    gx_pre_duration = 0.8e-3  # duration of readout pre-winder gradient [s]
-    gx_flat_time = n_readout * adc_dwell  # flat time of readout gradient [s]
-
     # define settings of rf excitation pulse
     rf_duration = 0.6e-3  # duration of the rf excitation pulse [s]
     rf_flip_angle = 12  # flip angle of rf excitation pulse [°]
@@ -425,9 +424,20 @@ def main(
     rf_apodization = 0.5  # apodization factor of rf excitation pulse
     readout_oversampling = 2  # readout oversampling factor, commonly 2. This reduces aliasing artifacts.
 
+    # this is just approximately, the final calculation is done in the kernel
+    n_readout_with_oversampling = int(n_readout * readout_oversampling * partial_echo_factor)
+    # define ADC and gradient timing
+    adc_dwell_time = 1.0 / (receiver_bandwidth_per_pixel * n_readout_with_oversampling)
+    gx_pre_duration = 0.7e-3  # duration of readout pre-winder gradient [s]
+    gx_flat_time, adc_dwell_time = find_gx_flat_time_on_adc_raster(
+        n_readout_with_oversampling, adc_dwell_time, system.grad_raster_time, system.adc_raster_time
+    )
+
     n_dummy_spokes = 2  # number of dummy RPE spokes before data acquisition to ensure steady state
 
+    te = None
     delta_te = 1.58e-3  # echo-spacing for 3-point Dixon at 3T
+    n_echoes = 3
 
     # define spoiling
     gx_spoil_duration = 1.9e-3  # duration of spoiler gradient [s]
@@ -449,8 +459,9 @@ def main(
 
     seq, min_te, min_tr = grpe_flash_dixon_kernel(
         system=system,
-        te=None,
+        te=te,
         delta_te=delta_te,
+        n_echoes=n_echoes,
         tr=tr,
         fov_x=fov_x,
         fov_y=fov_y,
@@ -494,7 +505,7 @@ def main(
     seq.set_definition('FOV', [fov_x, fov_y, fov_z])
     seq.set_definition('ReconMatrix', (n_readout, n_readout, 1))
     seq.set_definition('SliceThickness', fov_z)
-    seq.set_definition('TE', min_te)
+    seq.set_definition('TE', te or min_te)
     seq.set_definition('TR', tr or min_tr)
 
     # save seq-file to disk

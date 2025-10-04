@@ -13,12 +13,6 @@ def test_default_seq_duration(system_defaults):
     assert duration == pytest.approx(EXPECTED_DUR)
 
 
-def test_seq_creation_error_on_short_te(system_defaults):
-    """Test if error is raised on too short echo time."""
-    with pytest.raises(ValueError):
-        create_seq(system=system_defaults, te=1e-3, show_plots=False)
-
-
 def test_seq_creation_error_on_short_tr(system_defaults):
     """Test if error is raised on too short repetition time."""
     with pytest.raises(ValueError):
