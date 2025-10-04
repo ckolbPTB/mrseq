@@ -8,6 +8,7 @@ import pypulseq as pp
 from pypulseq.rotate import rotate
 
 from mrseq.preparations.fat_sat import add_fat_sat
+from mrseq.utils import MultiEchoAcquisition
 from mrseq.utils import round_to_raster
 from mrseq.utils import sys_defaults
 from mrseq.utils.create_ismrmrd_header import create_header
@@ -136,18 +137,16 @@ def grpe_flash_dixon_kernel(
         use='excitation',
     )
 
-    # create readout gradient and ADC
-    delta_k = 1 / fov_x
-    gx = pp.make_trapezoid(channel='x', flat_area=n_readout * delta_k, flat_time=gx_flat_time, system=system)
-    n_readout_with_oversampling = int(n_readout * readout_oversampling)
-    n_readout_with_oversampling = n_readout_with_oversampling + np.mod(n_readout_with_oversampling, 2)  # make even
-    adc = pp.make_adc(num_samples=n_readout_with_oversampling, duration=gx.flat_time, delay=gx.rise_time, system=system)
-
-    # create frequency encoding pre- and re-winder gradient
-    gx_pre = pp.make_trapezoid(channel='x', area=-gx.area / 2 - delta_k / 2, duration=gx_pre_duration, system=system)
-    k0_center_id = np.where((np.arange(n_readout_with_oversampling) - n_readout_with_oversampling / 2) * delta_k == 0)[
-        0
-    ][0]
+    multi_echo_gradient = MultiEchoAcquisition(
+        system=system,
+        delta_te=delta_te,
+        fov=fov_x,
+        n_readout=n_readout,
+        readout_oversampling=readout_oversampling,
+        partial_echo_factor=partial_echo_factor,
+        gx_flat_time=gx_flat_time,
+        gx_pre_duration=gx_pre_duration,
+    )
 
     # calculate gradient areas for phase encoding along each RPE line in a low-high order
     delta_ky = 1 / fov_y
@@ -175,17 +174,19 @@ def grpe_flash_dixon_kernel(
 
     # calculate minimum echo time
     if te is None:
-        gzr_gx_dur = pp.calc_duration(gzr, gx_pre)  # gzr and gx_pre are applied simultaneously
+        gzr_gx_dur = pp.calc_duration(gzr, multi_echo_gradient._gx_pre)  # gzr and gx_pre are applied simultaneously
     else:
-        gzr_gx_dur = pp.calc_duration(gzr) + pp.calc_duration(gx_pre)  # gzr and gx_pre are applied sequentially
+        gzr_gx_dur = pp.calc_duration(gzr) + pp.calc_duration(
+            multi_echo_gradient._gx_pre
+        )  # gzr and gx_pre are applied sequentially
 
     min_te = (
         rf.shape_dur / 2  # time from center to end of RF pulse
         + max(rf.ringdown_time, gz.fall_time)  # RF ringdown time or gradient fall time
         + gzr_gx_dur  # slice selection re-phasing gradient and readout pre-winder
-        + gx.delay  # potential delay of readout gradient
-        + gx.rise_time  # rise time of readout gradient
-        + (k0_center_id + 0.5) * adc.dwell  # time from beginning of ADC to time point of k-space center sample
+        + multi_echo_gradient._gx.delay  # potential delay of readout gradient
+        + multi_echo_gradient._gx.rise_time  # rise time of readout gradient
+        + (multi_echo_gradient._n_readout_pre_echo + 0.5) * multi_echo_gradient._adc.dwell
     )
 
     # calculate echo time delay (te_delay)
@@ -197,8 +198,9 @@ def grpe_flash_dixon_kernel(
     min_tr = (
         pp.calc_duration(gz)  # rf pulse
         + gzr_gx_dur  # slice selection re-phasing gradient and readout pre-winder
-        + pp.calc_duration(gx)  # readout gradient
-        + pp.calc_duration(gx_spoil)  # gradient spoiler
+        + pp.calc_duration(multi_echo_gradient._gx) * n_echoes  # readout gradient
+        + pp.calc_duration(multi_echo_gradient._gx_between) * (n_echoes - 1)  # readout gradient
+        + pp.calc_duration(gx_spoil, multi_echo_gradient._gx_post)  # gradient spoiler or readout-re-winder
     )
 
     # calculate repetition time delay (tr_delay)
@@ -225,7 +227,7 @@ def grpe_flash_dixon_kernel(
             fov=fov_x,
             res=fov_x / n_readout,
             slice_thickness=fov_z,
-            dt=adc.dwell,
+            dt=multi_echo_gradient._adc.dwell,
             n_k1=n_rpe_points,
             n_k2=n_rpe_spokes,
         )
@@ -242,7 +244,7 @@ def grpe_flash_dixon_kernel(
 
     # if mrd_header_file:
     #    acq = ismrmrd.Acquisition()
-    #    acq.resize(trajectory_dimensions=2, number_of_samples=adc.num_samples)
+    #    acq.resize(trajectory_dimensions=2, number_of_samples=multi_echo_gradient._adc.num_samples)
     #    prot.append_acquisition(acq)
 
     # Define sequence blocks
@@ -261,7 +263,7 @@ def grpe_flash_dixon_kernel(
                 # set rf pulse properties and add rf pulse block event
                 if rf_spoiling_phase_increment > 0:
                     rf.phase_offset = rf_phase / 180 * np.pi
-                    adc.phase_offset = rf_phase / 180 * np.pi
+                    multi_echo_gradient._adc.phase_offset = rf_phase / 180 * np.pi
 
                 # add rf pulse
                 seq.add_block(rf, gz)
@@ -282,7 +284,7 @@ def grpe_flash_dixon_kernel(
                 gy_pre = pp.make_trapezoid(
                     channel='y',
                     area=current_phase_area + pe_shift * delta_ky,
-                    duration=pp.calc_duration(gx_pre),
+                    duration=pp.calc_duration(multi_echo_gradient._gx_pre),
                     system=system,
                 )
 
@@ -296,7 +298,7 @@ def grpe_flash_dixon_kernel(
                     gz_pre = pp.make_trapezoid(
                         channel='z',
                         area=0,
-                        duration=pp.calc_duration(gx_pre),
+                        duration=pp.calc_duration(multi_echo_gradient._gx_pre),
                         system=system,
                     )
                 assert gy_pre.channel == 'y' and gz_pre.channel == 'z'
@@ -305,27 +307,19 @@ def grpe_flash_dixon_kernel(
                 gz_r_pre = pp.make_trapezoid(
                     channel='z',
                     area=gz_pre.area + gzr.area,
-                    duration=pp.calc_duration(gx_pre),
+                    duration=pp.calc_duration(multi_echo_gradient._gx_pre),
                     system=system,
                 )
 
                 label_contents = [pe_label, se_label]
-                seq.add_block(gx_pre, gy_pre, gz_r_pre, *label_contents)
+                seq.add_block(multi_echo_gradient._gx_pre, gy_pre, gz_r_pre, *label_contents)
 
                 # add delay due to TE
                 if te_delay > 0:
                     seq.add_block(pp.make_delay(te_delay))
 
-                # add readout gradient and ADC
-                for echo_ in range(n_echoes):
-                    if se_index >= 0:
-                        gx_sign = (-1) ** echo_
-                        labels = []
-                        labels.append(pp.make_label(type='SET', label='REV', value=gx_sign == -1))
-                        labels.append(pp.make_label(type='SET', label='ECO', value=echo_))
-                        seq.add_block(pp.scale_grad(gx, gx_sign), adc, *labels)
-                    else:
-                        seq.add_block(pp.make_delay(pp.calc_duration(gx, adc)))
+                # add readout gradients and ADCs
+                seq, _ = multi_echo_gradient.add_to_seq_without_pre_post_gradient(seq, n_echoes)
 
                 # add re-winder and spoiler gradients
                 gy_pre.amplitude = -gy_pre.amplitude
@@ -339,11 +333,11 @@ def grpe_flash_dixon_kernel(
                 if mrd_header_file and se_index >= 0:
                     # add acquisitions to metadata
                     k0_trajectory = np.linspace(
-                        -n_readout_with_oversampling // 2,
-                        (n_readout_with_oversampling // 2) - 1,
-                        n_readout_with_oversampling,
+                        -multi_echo_gradient._n_readout_pre_echo,
+                        multi_echo_gradient._n_readout_post_echo,
+                        multi_echo_gradient._n_readout_with_partial_echo,
                     )
-                    grpe_trajectory = np.zeros((n_readout_with_oversampling, 3), dtype=np.float32)
+                    grpe_trajectory = np.zeros((multi_echo_gradient._n_readout_with_partial_echo, 3), dtype=np.float32)
 
                     for echo_ in range(n_echoes):
                         gx_sign = (-1) ** echo_
@@ -352,7 +346,7 @@ def grpe_flash_dixon_kernel(
                         grpe_trajectory[:, 2] = (pe - n_rpe_points / 2 + pe_shift) * np.sin(rotation_angle_rad)
 
                         acq = ismrmrd.Acquisition()
-                        acq.resize(trajectory_dimensions=3, number_of_samples=adc.num_samples)
+                        acq.resize(trajectory_dimensions=3, number_of_samples=multi_echo_gradient._adc.num_samples)
                         acq.traj[:] = grpe_trajectory
                         prot.append_acquisition(acq)
 
