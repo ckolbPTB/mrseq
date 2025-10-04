@@ -1,7 +1,7 @@
 """Tests for 3D FLASH sequence with golden radial phase encoding."""
 
 import pytest
-from mrseq.scripts.grpe_flash import main as create_seq
+from mrseq.scripts.grpe_flash_dixon import main as create_seq
 
 EXPECTED_DUR = 7.96752  # defined 2025-09-22
 

@@ -13,9 +13,11 @@ from mrseq.utils import sys_defaults
 from mrseq.utils.create_ismrmrd_header import create_header
 
 
-def grpe_flash_kernel(
+def grpe_flash_dixon_kernel(
     system: pp.Opts,
     te: float | None,
+    delta_te: float | None,
+    n_echoes: int,
     tr: float | None,
     fov_x: float,
     fov_y: float,
@@ -25,6 +27,7 @@ def grpe_flash_kernel(
     n_rpe_points_per_shot: int,
     n_rpe_spokes: int,
     readout_oversampling: float,
+    partial_echo_factor: float,
     partial_fourier_factor: float,
     n_dummy_spokes: int,
     fat_saturation: bool,
@@ -47,6 +50,10 @@ def grpe_flash_kernel(
         PyPulseq system limits object.
     te
         Desired echo time (TE) (in seconds). Minimum echo time is used if set to None.
+    delta_te
+        Desired echo spacing (in seconds). Minimum echo spacing is used if set to None.
+    n_echoes
+        Number of echoes.
     tr
         Desired repetition time (TR) (in seconds).
     fov_x
@@ -66,6 +73,8 @@ def grpe_flash_kernel(
         Number of radial phase encoding spokes (number of RPE lines).
     readout_oversampling
         Readout oversampling factor, commonly 2. This reduces aliasing artifacts.
+    partial_echo_factor
+        Partial echo factor along readout (between 0.5 and 1).
     partial_fourier_factor
         Partial Fourier factor along RPE lines (between 0.5 and 1).
     n_dummy_spokes
@@ -106,7 +115,10 @@ def grpe_flash_kernel(
     spoke_angle = np.pi * 0.618034
     rpe_radial_shift = [0, 0.5, 0.25, 0.75]
 
-    n_echoes = 3
+    if partial_echo_factor > 1 or partial_echo_factor < 0.5:
+        raise ValueError('Partial echo factor has to be within 0.5 and 1')
+    if partial_fourier_factor > 1 or partial_fourier_factor < 0.5:
+        raise ValueError('Partial Fourier factor has to be within 0.5 and 1')
 
     # create PyPulseq Sequence object and set system limits
     seq = pp.Sequence(system=system)
@@ -353,7 +365,6 @@ def grpe_flash_kernel(
 
 def main(
     system: pp.Opts | None = None,
-    te: float | None = None,
     tr: float | None = None,
     fov_x: float = 128e-3,
     fov_y: float = 128e-3,
@@ -362,6 +373,7 @@ def main(
     n_rpe_points: int = 128,
     n_rpe_points_per_shot: int = 8,
     n_rpe_spokes: int = 16,
+    partial_echo_factor: float = 0.7,
     partial_fourier_factor: float = 0.7,
     fat_saturation: bool = False,
     show_plots: bool = True,
@@ -374,8 +386,6 @@ def main(
     ----------
     system
         PyPulseq system limits object.
-    te
-        Desired echo time (TE) (in seconds). Minimum echo time is used if set to None.
     tr
         Desired repetition time (TR) (in seconds). Minimum repetition time is used if set to None.
     fov_x
@@ -393,6 +403,8 @@ def main(
         point of the highest k-space frequency. Fat-saturation pulses are applied prior to each shot.
     n_rpe_spokes
         Number of radial phase encoding spokes (number of RPE lines).
+    partial_echo_factor
+        Partial echo factor along the readout (between 0.5 and 1).
     partial_fourier_factor
         Partial Fourier factor along RPE lines (between 0.5 and 1).
     fat_saturation
@@ -421,6 +433,8 @@ def main(
 
     n_dummy_spokes = 2  # number of dummy RPE spokes before data acquisition to ensure steady state
 
+    delta_te = 1.58e-3  # echo-spacing for 3-point Dixon at 3T
+
     # define spoiling
     gx_spoil_duration = 1.9e-3  # duration of spoiler gradient [s]
     gx_spoil_area = readout_oversampling * n_readout * 1 / fov_x  # area / zeroth gradient moment of spoiler gradient
@@ -439,9 +453,10 @@ def main(
     if (output_path / Path(filename + '_header.h5')).exists():
         (output_path / Path(filename + '_header.h5')).unlink()
 
-    seq, min_te, min_tr = grpe_flash_kernel(
+    seq, min_te, min_tr = grpe_flash_dixon_kernel(
         system=system,
-        te=te,
+        te=None,
+        delta_te=delta_te,
         tr=tr,
         fov_x=fov_x,
         fov_y=fov_y,
@@ -451,6 +466,7 @@ def main(
         n_rpe_points_per_shot=n_rpe_points_per_shot,
         n_rpe_spokes=n_rpe_spokes,
         readout_oversampling=readout_oversampling,
+        partial_echo_factor=partial_echo_factor,
         partial_fourier_factor=partial_fourier_factor,
         n_dummy_spokes=n_dummy_spokes,
         fat_saturation=fat_saturation,
@@ -484,7 +500,7 @@ def main(
     seq.set_definition('FOV', [fov_x, fov_y, fov_z])
     seq.set_definition('ReconMatrix', (n_readout, n_readout, 1))
     seq.set_definition('SliceThickness', fov_z)
-    seq.set_definition('TE', te or min_te)
+    seq.set_definition('TE', min_te)
     seq.set_definition('TR', tr or min_tr)
 
     # save seq-file to disk
