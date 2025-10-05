@@ -30,10 +30,3 @@ def test_seq_duration_vary_params_without_effect(system_defaults):
     )
     duration = seq.duration()[0]
     assert duration == pytest.approx(EXPECTED_DUR)
-
-
-def test_fat_sat(system_defaults):
-    """Test that fat sat leads to longer sequence."""
-    seq = create_seq(system=system_defaults, show_plots=False, fat_saturation=True)
-    duration = seq.duration()[0]
-    assert duration > EXPECTED_DUR

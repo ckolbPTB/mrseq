@@ -7,7 +7,6 @@ import numpy as np
 import pypulseq as pp
 from pypulseq.rotate import rotate
 
-from mrseq.preparations.fat_sat import add_fat_sat
 from mrseq.utils import MultiEchoAcquisition
 from mrseq.utils import find_gx_flat_time_on_adc_raster
 from mrseq.utils import round_to_raster
@@ -32,7 +31,6 @@ def grpe_flash_dixon_kernel(
     partial_echo_factor: float,
     partial_fourier_factor: float,
     n_dummy_spokes: int,
-    fat_saturation: bool,
     gx_pre_duration: float,
     gx_flat_time: float,
     rf_duration: float,
@@ -81,8 +79,6 @@ def grpe_flash_dixon_kernel(
         Partial Fourier factor along RPE lines (between 0.5 and 1).
     n_dummy_spokes
         Number of dummy RPE spokes before data acquisition to ensure steady state.
-    fat_saturation
-        Toggles fat saturation pulse prior to each shot.
     gx_pre_duration
         Duration of readout pre-winder gradient (in seconds)
     gx_flat_time
@@ -214,9 +210,6 @@ def grpe_flash_dixon_kernel(
     print(f'\nCurrent echo time = {(min_te + te_delay) * 1000:.2f} ms')
     print(f'Current repetition time = {(current_min_tr + tr_delay) * 1000:.2f} ms')
 
-    if fat_saturation:
-        fat_sat_block, _ = add_fat_sat(seq=None, system=system)
-
     # choose initial rf phase offset
     rf_phase = 0
     rf_inc = 0
@@ -252,11 +245,6 @@ def grpe_flash_dixon_kernel(
     for se_index in np.arange(-n_dummy_spokes, n_rpe_spokes):
         se_label = pp.make_label(type='SET', label='PAR', value=int(se_index))
         for shot_index in range(n_shots_per_rpe_spoke):
-            # add fat saturation block
-            if fat_saturation:
-                for idx in fat_sat_block.block_events:
-                    seq.add_block(fat_sat_block.get_block(idx))
-
             for pe_index in range(n_rpe_points_per_shot):
                 pe = int(enc_steps_pe[shot_index * n_rpe_points_per_shot + pe_index])
                 pe_label = pp.make_label(type='SET', label='LIN', value=pe)
@@ -370,7 +358,6 @@ def main(
     n_rpe_spokes: int = 16,
     partial_echo_factor: float = 0.7,
     partial_fourier_factor: float = 0.7,
-    fat_saturation: bool = False,
     receiver_bandwidth_per_pixel: float = 1200,  # Hz/pixel
     show_plots: bool = True,
     test_report: bool = True,
@@ -403,8 +390,6 @@ def main(
         Partial echo factor along the readout (between 0.5 and 1).
     partial_fourier_factor
         Partial Fourier factor along RPE lines (between 0.5 and 1).
-    fat_saturation
-        Toggles fat saturation pulse prior to each shot.
     receiver_bandwidth_per_pixel
         Desired receiver bandwidth per pixel (in Hz/pixel). This is used to calculate the readout duration.
     show_plots
@@ -447,8 +432,6 @@ def main(
     # define sequence filename
     filename = f'{Path(__file__).stem}_fov{int(fov_x * 1000)}_{int(fov_y * 1000)}_{int(fov_z * 1000)}mm_'
     filename += f'{n_readout}_{n_rpe_points}_{n_rpe_spokes}_3ne'
-    if fat_saturation:
-        filename += '_fatsat'
 
     output_path = Path.cwd() / 'output'
     output_path.mkdir(parents=True, exist_ok=True)
@@ -474,7 +457,6 @@ def main(
         partial_echo_factor=partial_echo_factor,
         partial_fourier_factor=partial_fourier_factor,
         n_dummy_spokes=n_dummy_spokes,
-        fat_saturation=fat_saturation,
         gx_pre_duration=gx_pre_duration,
         gx_flat_time=gx_flat_time,
         rf_duration=rf_duration,
