@@ -30,3 +30,19 @@ def test_seq_duration_vary_params_without_effect(system_defaults):
     )
     duration = seq.duration()[0]
     assert duration == pytest.approx(EXPECTED_DUR)
+
+
+def test_seq_creation_error_on_wrong_partial_echo_factor(system_defaults):
+    """Test if error is raised on wrong partial echo factor."""
+    with pytest.raises(ValueError):
+        create_seq(system=system_defaults, partial_echo_factor=1.1, show_plots=False)
+    with pytest.raises(ValueError):
+        create_seq(system=system_defaults, partial_echo_factor=0.4, show_plots=False)
+
+
+def test_seq_creation_error_on_wrong_partial_fourier_factor(system_defaults):
+    """Test if error is raised on wrong partial Fourier factor."""
+    with pytest.raises(ValueError):
+        create_seq(system=system_defaults, partial_fourier_factor=1.1, show_plots=False)
+    with pytest.raises(ValueError):
+        create_seq(system=system_defaults, partial_fourier_factor=0.4, show_plots=False)
