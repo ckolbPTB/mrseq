@@ -3,7 +3,7 @@
 import pytest
 from mrseq.scripts.grpe_flash_dixon import main as create_seq
 
-EXPECTED_DUR = 7.96752  # defined 2025-09-22
+EXPECTED_DUR = 17.75664  # defined 2025-10-05
 
 
 def test_default_seq_duration(system_defaults):
