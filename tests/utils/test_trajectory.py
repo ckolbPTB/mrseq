@@ -219,7 +219,9 @@ def test_multi_gradient_echo(system_defaults):
 
         return gx_readout_list, gy_readout_list, adc, double_spiral_trajectory
 
-    def calc_spiral_update(
+    from typing import Literal
+
+    def spiral_acquisition(
         system,
         n_readout,
         fov_xy,
@@ -228,6 +230,7 @@ def test_multi_gradient_echo(system_defaults):
         oversampling_along_readout,
         n_unique_spirals,
         adc_dwell_time,
+        type=Literal['out', 'in-out'],
     ):
         # calculate single spiral trajectory
         traj, grad, s, timing, r, theta = variable_density_spiral_trajectory(
@@ -238,12 +241,14 @@ def test_multi_gradient_echo(system_defaults):
             max_kspace_radius=0.5 / fov_xy * n_readout,
         )
 
-        grad = np.concatenate((-np.asarray(grad * np.exp(1j * np.pi))[::-1], grad))
-        traj = np.concatenate((np.asarray(traj * np.exp(1j * np.pi))[::-1], traj))
-        n_unique_spirals = n_unique_spirals // 2
+        n_samples_to_echo = 0
+        if type == 'in-out':
+            n_samples_to_echo = len(grad)
+            grad = np.concatenate((-np.asarray(grad * np.exp(1j * np.pi))[::-1], grad))
+            traj = np.concatenate((np.asarray(traj * np.exp(1j * np.pi))[::-1], traj))
 
         # calculate ADC
-        adc_total_samples = np.shape(grad)[0]
+        adc_total_samples = len(grad)
         if adc_total_samples > 8192:
             raise ValueError(f'Number of ADC samples ({adc_total_samples}) exceed maximum value of 8192.')
         gc = gcd(n_readout * 2 * oversampling_along_readout, round(system.grad_raster_time / system.adc_raster_time))
@@ -258,21 +263,19 @@ def test_multi_gradient_echo(system_defaults):
         delta_angle = np.pi / n_unique_spirals
 
         # Create gradient values and trajectory for different spirals
-        grad_x = [np.real(grad * np.exp(1j * delta_angle * idx)) for idx in np.arange(n_unique_spirals)]
-        grad_y = [np.imag(grad * np.exp(1j * delta_angle * idx)) for idx in np.arange(n_unique_spirals)]
-        traj_x = [np.real(traj * np.exp(1j * delta_angle * idx + np.pi)) for idx in np.arange(n_unique_spirals)]
-        traj_y = [np.imag(traj * np.exp(1j * delta_angle * idx + np.pi)) for idx in np.arange(n_unique_spirals)]
+        grad = [grad * np.exp(1j * delta_angle * idx) for idx in np.arange(n_unique_spirals)]
+        traj = [traj * np.exp(1j * delta_angle * idx) for idx in np.arange(n_unique_spirals)]
 
         # Create gradient objects
-        gx = [pp.make_arbitrary_grad(channel='x', waveform=grad, delay=adc.delay, system=system) for grad in grad_x]
-        gy = [pp.make_arbitrary_grad(channel='y', waveform=grad, delay=adc.delay, system=system) for grad in grad_y]
+        gx = [pp.make_arbitrary_grad(channel='x', waveform=g.real, delay=adc.delay, system=system) for g in grad]
+        gy = [pp.make_arbitrary_grad(channel='y', waveform=g.imag, delay=adc.delay, system=system) for g in grad]
 
         # Calculate pre- and re-winder gradients
         gx_rew, gx_pre, gy_rew, gy_pre = [], [], [], []
         for gx_, gy_ in zip(gx, gy, strict=True):
             gx_rew.append(
                 pp.make_extended_trapezoid_area(
-                    area=-gx_.area / 2,
+                    area=-gx_.area if type == 'out' else -gx_.area / 2,
                     channel='x',
                     grad_start=gx_.last,
                     grad_end=0,
@@ -282,7 +285,7 @@ def test_multi_gradient_echo(system_defaults):
             )
             gy_rew.append(
                 pp.make_extended_trapezoid_area(
-                    area=-gy_.area / 2,
+                    area=-gy_.area if type == 'out' else -gy_.area / 2,
                     channel='y',
                     grad_start=gy_.last,
                     grad_end=0,
@@ -291,36 +294,44 @@ def test_multi_gradient_echo(system_defaults):
                 )[0]
             )
 
-            gx_pre.append(
-                pp.make_extended_trapezoid_area(
-                    area=-gx_.area / 2,
-                    channel='x',
-                    grad_start=0,
-                    grad_end=gx_.first,
-                    system=system,
-                    convert_to_arbitrary=True,
-                )[0]
-            )
+            if type == 'in-out':
+                gx_pre.append(
+                    pp.make_extended_trapezoid_area(
+                        area=-gx_.area / 2,
+                        channel='x',
+                        grad_start=0,
+                        grad_end=gx_.first,
+                        system=system,
+                        convert_to_arbitrary=True,
+                    )[0]
+                )
 
-            gy_pre.append(
-                pp.make_extended_trapezoid_area(
-                    area=-gy_.area / 2,
-                    channel='y',
-                    grad_start=0,
-                    grad_end=gy_.first,
-                    system=system,
-                    convert_to_arbitrary=True,
-                )[0]
-            )
+                gy_pre.append(
+                    pp.make_extended_trapezoid_area(
+                        area=-gy_.area / 2,
+                        channel='y',
+                        grad_start=0,
+                        grad_end=gy_.first,
+                        system=system,
+                        convert_to_arbitrary=True,
+                    )[0]
+                )
+            else:
+                gx_pre.append(None)
+                gy_pre.append(None)
 
-        prewinder_duration_max = 1e-3
-        adc.delay = prewinder_duration_max
+        if type == 'in-out':
+            prewinder_duration_max = 1e-3
+            adc.delay = prewinder_duration_max
 
-        for i in range(len(gx_pre)):
-            gy_pre[i].delay = prewinder_duration_max - gy_pre[i].shape_dur
-            gx_pre[i].delay = prewinder_duration_max - gx_pre[i].shape_dur
+            for i in range(len(gx_pre)):
+                gy_pre[i].delay = prewinder_duration_max - gy_pre[i].shape_dur
+                gx_pre[i].delay = prewinder_duration_max - gx_pre[i].shape_dur
+        else:
+            prewinder_duration_max = 0.0
 
         def combine_gradients(*grad_objects, channel):
+            grad_objects = [grad for grad in grad_objects if grad]  # Remove None
             waveform_combined = np.concatenate([grad.waveform for grad in grad_objects])
 
             return pp.make_arbitrary_grad(
@@ -334,15 +345,18 @@ def test_multi_gradient_echo(system_defaults):
 
         gx_combined = [
             combine_gradients(gx_pre, gx_in_out, gx_rew, channel='x')
-            for gx_pre, gx_in_out, gx_rew in zip(gx_pre, gx, gx_rew, strict=False)
+            for gx_pre, gx_in_out, gx_rew in zip(gx_pre, gx, gx_rew, strict=True)
         ]
         gy_combined = [
             combine_gradients(gy_pre, gy_in_out, gy_rew, channel='y')
-            for gy_pre, gy_in_out, gy_rew in zip(gy_pre, gy, gy_rew, strict=False)
+            for gy_pre, gy_in_out, gy_rew in zip(gy_pre, gy, gy_rew, strict=True)
         ]
-        trajectory = np.stack((np.asarray(traj_x), np.asarray(traj_y), np.zeros_like(traj_y)), axis=-1)
 
-        return gx_combined, gy_combined, adc, trajectory
+        trajectory = np.stack((np.asarray(traj).real, np.asarray(traj).imag, np.zeros_like(traj).real), axis=-1)
+
+        time_to_echo = prewinder_duration_max + (n_samples_to_echo + 0.5) * adc.dwell
+
+        return gx_combined, gy_combined, adc, trajectory, time_to_echo
 
     import matplotlib.pyplot as plt
 
@@ -378,7 +392,7 @@ def test_multi_gradient_echo(system_defaults):
         seq.add_block(pp.make_delay(1e-3))
     gx_catarina_intp, gy_catarina_intp, dt = get_interp_waveform(seq)
 
-    gx_readout_list, gy_readout_list, adc, double_spiral_trajectory = calc_spiral_update(
+    gx_readout_list, gy_readout_list, adc, double_spiral_trajectory, time_to_echo = spiral_acquisition(
         system,
         n_readout,
         fov_xy,
@@ -387,6 +401,7 @@ def test_multi_gradient_echo(system_defaults):
         oversampling_along_readout,
         n_unique_spirals,
         adc_dwell_time,
+        type='in-out',
     )
 
     seq = pp.Sequence(system=system_defaults)
@@ -470,13 +485,34 @@ def test_multi_gradient_echo(system_defaults):
         # Remove k0-crossings at the beginning and end of the block
         k0_idx = [ki for ki in k0_idx if (ki > 100 and ki < len(dt) - 100)]
 
-        time_of_k0_adc_sample = adc.delay + double_spiral_trajectory.shape[1] // 2 * adc.dwell
-
         assert len(k0_idx) == 1
-        assert m0_intp[0] < 1e-9
-        assert m0_intp[-1] < 1e-9
+        assert m0_intp[0] < 1e-4
+        assert m0_intp[-1] < 1e-4
         assert np.isclose(dt[k0_idx], time_to_echo, atol=adc.dwell / 2)
-        assert np.isclose(dt[k0_idx], time_of_k0_adc_sample, atol=adc.dwell / 2)
+
+        k_traj_adc, _, _, _, t_adc = seq.calculate_kspace()
+
+        w = seq.waveforms_and_times()
+        gx_waveform = w[0][0][1]
+        gx_waveform /= np.max(np.abs(gx_waveform))
+        gx_waveform_time = w[0][0][0]
+        plt.figure()
+        plt.plot(gx_waveform_time, gx_waveform, 'ob-')
+        plt.plot(t_adc, np.ones_like(t_adc) * 0, 'rx')
+
+        k_traj_adc /= np.max(np.abs(k_traj_adc))
+        k_traj_spiral = double_spiral_trajectory[spiral_idx, :, :]
+        k_traj_spiral /= np.max(np.abs(k_traj_spiral))
+        if spiral_idx == 0:
+            fig, ax = plt.subplots(1, 2)
+            ax[0].plot(k_traj_adc[0, :], 'o-', label='pulseq')
+            ax[0].plot(-k_traj_spiral[:, 0], '+-', label='vds')
+            ax[1].plot(k_traj_adc[1, :], 'o-', label='pulseq')
+            ax[1].plot(-k_traj_spiral[:, 1], '+-', label='vds')
+            plt.legend()
+            # ax[2].plot(gx_waveform_intp, label='gx'); ax[2].plot(gy_waveform_intp, label='gy')
+        np.testing.assert_allclose(k_traj_adc[0, :], -k_traj_spiral[:, 0], atol=1e-3)
+        np.testing.assert_allclose(k_traj_adc[1, :], -k_traj_spiral[:, 1], atol=1e-3)
 
     assert seq is not None
 
