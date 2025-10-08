@@ -64,12 +64,13 @@ def spiral_acquisition(
         max_kspace_radius=0.5 / fov * n_readout,
     )
 
-    delta_angle = np.pi / n_unique_spirals
+    delta_angle = 2 * np.pi / n_unique_spirals
     n_samples_to_echo = 0.5
     if spiral_type == 'in-out':
         n_samples_to_echo = len(grad)
         grad = np.concatenate((-np.asarray(grad * np.exp(1j * np.pi))[::-1], grad))
         traj = np.concatenate((np.asarray(traj * np.exp(1j * np.pi))[::-1], traj))
+        delta_angle = delta_angle / 2
 
     # calculate ADC
     n_readout_with_oversampling = len(grad) * readout_oversampling

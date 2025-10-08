@@ -13,11 +13,11 @@ def quadratic_formula_solver(a: float, b: float, c: float) -> tuple[float, float
 
     Parameters
     ----------
-    a : float
+    a
         Coefficient of the x^2 term.
-    b : float
+    b
         Coefficient of the x term.
-    c : float
+    c
         Constant term of the equation.
 
     Returns
@@ -47,23 +47,23 @@ def calculate_angular_and_radial_acceleration(
 
     Parameters
     ----------
-    max_slew : float
+    max_slew
         Maximum slew rate of the system in Hz/m/s.
-    max_grad : float
+    max_grad
         Maximum gradient amplitude in Hz/m.
-    radius : float
+    radius
         Current radius of the spiral being constructed in meters.
-    radius_derivative : float
+    radius_derivative
         Derivative of the radius (rate of change) of the spiral in meters.
-    sampling_period : float
+    sampling_period
         Sampling period (s) for gradient and acquisition.
-    sampling_period_os : float
+    sampling_period_os
         Sampling period (s) for gradient and acquisition, divided by an oversampling factor.
-    n_interleaves : int
+    n_interleaves
         Number of spiral arms (interleaves).
-    fov_coefficients : list
+    fov_coefficients
         List of coefficients defining the Field of View (FOV) profile.
-    max_kspace_radius : float
+    max_kspace_radius
         Maximum radius in k-space in m^(-1).
 
     Returns
@@ -154,15 +154,15 @@ def variable_density_spiral_trajectory(
 
     Parameters
     ----------
-    system : pp.Opts
+    system
         PyPulseq system object containing gradient and slew rate limits.
-    sampling_period : float
+    sampling_period
         Base sampling period for gradient and acquisition.
-    n_interleaves : int
+    n_interleaves
         Number of spiral arms (interleaves) in the trajectory.
-    fov_coefficients : list
+    fov_coefficients
         Coefficients defining the Field of View (FOV) profile.
-    max_kspace_radius : float
+    max_kspace_radius
         Maximum k-space radius in inverse meters.
 
     Returns
