@@ -18,6 +18,10 @@ def test_seq_creation_error_on_short_te(system_defaults):
     with pytest.raises(ValueError):
         create_seq(system=system_defaults, te=1e-3, show_plots=False)
 
+def test_seq_creation_error_on_short_tr(system_defaults):
+    """Test if error is raised on too short repetition time."""
+    with pytest.raises(ValueError):
+        create_seq(system=system_defaults, tr=1e-3, show_plots=False)
 
 def test_seq_duration_vary_params_without_effect(system_defaults):
     """Test if sequence duration is as expected."""
