@@ -8,14 +8,69 @@ import pypulseq as pp
 from mrseq.utils import variable_density_spiral_trajectory
 
 
+def undersampled_variable_density_spiral(system: pp.Opts, n_readout: int, fov: float, undersampling_factor: float):
+    """Create undersampled variable density spiral.
+
+    The distribution of the k-space points of a spiral trajectory are restricted by the maximum gradient amplitude and
+    slew rate. This makes an analytic solution for a given undersampling factor challenging. Here we use an iterative
+    approach in order to achieve a variable density spiral with a certain number of readout samplings and undersampling
+    factor while keeping the k-space center fully sampled.
+
+    The reduction of the field-of-view towards the k-space periphery is varied until a k-space trajectory is found
+    which achieves the number of readout samplings as close to `n_readout` and an undersampling factor as close to
+    `undersampling_factor` as possible.
+
+    Parameters
+    ----------
+    system
+        PyPulseq system limits object.
+    n_readout
+        Number of readout points per spiral.
+    fov
+        Field of view (in meters).
+    undersampling_factor
+        Undersampling factor of spiral trajectory
+
+    Returns
+    -------
+    tuple(np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, float)
+        - k-space trajectory (k)
+        - Gradient waveform (g)
+        - Slew rate (s)
+        - Time points for the trajectory (time)
+        - Radius values (r)
+        - Angular positions (theta)
+        - Number of spiral arms
+        - Coefficient to reduce the field-of-view in the k-space periphery
+
+    """
+    # calculate single spiral trajectory
+    n_k0 = np.inf
+    fov_scaling = 0.0
+    n_spirals = int(n_readout / undersampling_factor)
+    while n_k0 > n_readout:
+        fov_coefficients = [fov, -fov * fov_scaling]
+
+        traj, grad, s, timing, r, theta = variable_density_spiral_trajectory(
+            system=system,
+            sampling_period=system.grad_raster_time,
+            n_interleaves=n_spirals,
+            fov_coefficients=fov_coefficients,
+            max_kspace_radius=0.5 / fov * n_readout,
+        )
+        n_k0 = len(grad)
+        fov_scaling += 0.01
+
+    return traj, grad, s, timing, r, theta, n_spirals, fov_scaling - 0.01
+
+
 def spiral_acquisition(
     system: pp.Opts,
     n_readout: int,
     fov: float,
-    n_spirals_for_vds_calc: int,
-    fov_scaling: float,
+    undersampling_factor: float,
     readout_oversampling: Literal[1, 2, 4],
-    n_unique_spirals: int,
+    n_spirals: int | None,
     max_pre_duration: float,
     spiral_type=Literal['out', 'in-out'],
 ):
@@ -29,14 +84,12 @@ def spiral_acquisition(
         Number of readout points per spiral.
     fov
         Field of view (in meters).
-    n_spirals_for_vds_calc
-        Number of spirals used for variable density spiral trajectory calculation.
-    fov_scaling
-        Scaling coefficients for the field of view in variable density spiral calculation.
+    undersampling_factor
+        Undersampling factor.
     readout_oversampling
         Oversampling factor for the readout trajectory.
-    n_unique_spirals
-        Number of unique spirals to generate.
+    n_spirals
+        Number of spirals to generate. If set to None, this value will be set based on the undersampling factor.
     max_pre_duration : float
         Maximum duration for pre-winder gradients (in seconds).
     spiral_type
@@ -56,15 +109,16 @@ def spiral_acquisition(
         Time to echo from beginning of gradients (in seconds).
     """
     # calculate single spiral trajectory
-    traj, grad, s, timing, r, theta = variable_density_spiral_trajectory(
-        system=system,
-        sampling_period=system.grad_raster_time,
-        n_interleaves=n_spirals_for_vds_calc,
-        fov_coefficients=fov_scaling,
-        max_kspace_radius=0.5 / fov * n_readout,
+    traj, grad, s, timing, r, theta, n_spirals_undersampling, fov_coefficient = undersampled_variable_density_spiral(
+        system, n_readout, fov, undersampling_factor
+    )
+    n_spirals = n_spirals_undersampling if n_spirals is None else n_spirals
+    print(
+        f'Target undersampling: {undersampling_factor} - ',
+        f'achieved undersampling: {n_readout**2 / (len(traj) * n_spirals_undersampling)}',
     )
 
-    delta_angle = 2 * np.pi / n_unique_spirals
+    delta_angle = 2 * np.pi / n_spirals
     n_samples_to_echo = 0.5
     if spiral_type == 'in-out':
         n_samples_to_echo = len(grad)
@@ -87,8 +141,8 @@ def spiral_acquisition(
     print(f'Receiver bandwidth: {int(1.0 / (adc_dwell_time * n_readout_with_oversampling))} Hz/pixel')
 
     # Create gradient values and trajectory for different spirals
-    grad = [grad * np.exp(1j * delta_angle * idx) for idx in np.arange(n_unique_spirals)]
-    traj = [traj * np.exp(1j * delta_angle * idx) for idx in np.arange(n_unique_spirals)]
+    grad = [grad * np.exp(1j * delta_angle * idx) for idx in np.arange(n_spirals)]
+    traj = [traj * np.exp(1j * delta_angle * idx) for idx in np.arange(n_spirals)]
 
     # Create gradient objects
     gx = [pp.make_arbitrary_grad(channel='x', waveform=g.real, delay=adc.delay, system=system) for g in grad]
@@ -176,7 +230,7 @@ def spiral_acquisition(
     ]
 
     # -1 to match pulseq trajectory calculation
-    trajectory = -np.stack((np.asarray(traj).real, np.asarray(traj).imag, np.zeros_like(traj).real), axis=-1)
+    trajectory = -np.stack((np.asarray(traj).real, np.asarray(traj).imag), axis=-1)
 
     time_to_echo = max_pre_duration + n_samples_to_echo * readout_oversampling * adc.dwell
 

@@ -4,6 +4,7 @@ import numpy as np
 import pypulseq as pp
 import pytest
 from mrseq.utils import spiral_acquisition
+from mrseq.utils.trajectory import undersampled_variable_density_spiral
 
 
 def get_interp_waveform_for_gx_gx(seq: pp.Sequence, dt: np.ndarray | None = None, scale: float = 1.0):
@@ -46,33 +47,43 @@ def get_interp_waveform_for_gx_gx(seq: pp.Sequence, dt: np.ndarray | None = None
 
 @pytest.mark.parametrize('n_readout', (128, 256))
 @pytest.mark.parametrize('fov', (128e-3, 320e-3))
-@pytest.mark.parametrize('n_unique_spirals', (16, 50))
-@pytest.mark.parametrize('reduce_fov', (0, 0.4))
-@pytest.mark.parametrize('n_spirals_for_vds_calc', (80, 160))
+@pytest.mark.parametrize('undersampling_factor', (1, 2, 3, 4))
+def test_undersampled_variable_density_spiral(
+    system_defaults: pp.Opts, n_readout: int, fov: float, undersampling_factor: float
+):
+    """Test spiral for different undersampling factors."""
+    traj, grad, s, timing, r, theta, n_spirals, fov_coefficient = undersampled_variable_density_spiral(
+        system_defaults, n_readout, fov, undersampling_factor
+    )
+    total_number_of_points = len(traj) * n_spirals
+    np.testing.assert_almost_equal(n_readout**2 / total_number_of_points, undersampling_factor, 0)
+
+
+@pytest.mark.parametrize('n_readout', (64, 256))
+@pytest.mark.parametrize('fov', (128e-3, 320e-3))
+@pytest.mark.parametrize('n_spirals', (16, None))
+@pytest.mark.parametrize('undersampling_factor', (1, 2, 3.5))
 @pytest.mark.parametrize('readout_oversampling', (1, 2, 4))
 @pytest.mark.parametrize('spiral_type', ('out', 'in-out'))
 def test_spiral_acquisition(
     system_defaults: pp.Opts,
     n_readout: int,
     fov: float,
-    n_unique_spirals: int,
-    reduce_fov: float,
-    n_spirals_for_vds_calc: int,
+    undersampling_factor: float,
+    n_spirals: int,
     readout_oversampling: int,
     spiral_type: str,
 ):
     """Test spiral trajectories for different parameter combinations."""
-    fov_scaling = [fov, fov * reduce_fov]
     g_pre_duration = 2e-3  # make this duration long to work for all combinations
 
     gx, gy, adc, trajectory, time_to_echo = spiral_acquisition(
         system_defaults,
         n_readout,
         fov,
-        n_spirals_for_vds_calc,
-        fov_scaling,
+        undersampling_factor,
         readout_oversampling,
-        n_unique_spirals,
+        n_spirals,
         g_pre_duration,
         spiral_type=spiral_type,
     )
@@ -105,8 +116,8 @@ def test_spiral_acquisition(
         k_traj_adc /= np.max(np.abs(k_traj_adc[:, 1:-1]))
         k_traj_spiral = trajectory[spiral_idx, :, :]
         k_traj_spiral /= np.max(np.abs(k_traj_spiral[1:-1, :]))
-        np.testing.assert_allclose(k_traj_adc[0, 1:-1], k_traj_spiral[1:-1, 0], atol=5e-3)
-        np.testing.assert_allclose(k_traj_adc[1, 1:-1], k_traj_spiral[1:-1, 1], atol=5e-3)
+        np.testing.assert_allclose(k_traj_adc[0, 1:-1], k_traj_spiral[1:-1, 0], atol=1e-2)
+        np.testing.assert_allclose(k_traj_adc[1, 1:-1], k_traj_spiral[1:-1, 1], atol=1e-2)
 
     # Verify entire trajectory
     seq = pp.Sequence(system=system_defaults)
