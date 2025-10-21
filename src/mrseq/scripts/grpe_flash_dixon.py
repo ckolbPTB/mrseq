@@ -231,15 +231,15 @@ def grpe_flash_dixon_kernel(
         prot.write_xml_header(hdr.toXML('utf-8'))
 
     # obtain noise samples
-    # seq.add_block(pp.make_label(label='LIN', type='SET', value=0), pp.make_label(label='SLC', type='SET', value=0))
-    # seq.add_block(adc, pp.make_label(label='NOISE', type='SET', value=True))
-    # seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))
-    # seq.add_block(pp.make_delay(system.rf_dead_time))
+    seq.add_block(pp.make_label(label='LIN', type='SET', value=0), pp.make_label(label='SLC', type='SET', value=0))
+    seq.add_block(multi_echo_gradient._adc, pp.make_label(label='NOISE', type='SET', value=True))
+    seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))
+    seq.add_block(pp.make_delay(system.rf_dead_time))
 
-    # if mrd_header_file:
-    #    acq = ismrmrd.Acquisition()
-    #    acq.resize(trajectory_dimensions=2, number_of_samples=multi_echo_gradient._adc.num_samples)
-    #    prot.append_acquisition(acq)
+    if mrd_header_file:
+        acq = ismrmrd.Acquisition()
+        acq.resize(trajectory_dimensions=2, number_of_samples=multi_echo_gradient._adc.num_samples)
+        prot.append_acquisition(acq)
 
     # Define sequence blocks
     for se_index in np.arange(-n_dummy_spokes, n_rpe_spokes):
@@ -489,6 +489,7 @@ def main(
     seq.set_definition('SliceThickness', fov_z)
     seq.set_definition('TE', te or min_te)
     seq.set_definition('TR', tr or min_tr)
+    seq.set_definition('ReadoutOversamplingFactor', readout_oversampling)
 
     # save seq-file to disk
     print(f"\nSaving sequence file '{filename}.seq' into folder '{output_path}'.")
