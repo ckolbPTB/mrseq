@@ -238,7 +238,7 @@ def grpe_flash_dixon_kernel(
 
     if mrd_header_file:
         acq = ismrmrd.Acquisition()
-        acq.resize(trajectory_dimensions=2, number_of_samples=multi_echo_gradient._adc.num_samples)
+        acq.resize(trajectory_dimensions=3, number_of_samples=multi_echo_gradient._adc.num_samples)
         prot.append_acquisition(acq)
 
     # Define sequence blocks
