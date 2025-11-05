@@ -156,11 +156,15 @@ def t2_tse_kernel(
     min_tau3 += max(rf_ref.delay, gz_ref.delay + gz_ref.rise_time)
     min_tau3 += pp.calc_duration(gz_crush)
 
-    min_te = 2 * max(
-        round_to_raster(min_tau1, system.block_duration_raster),
-        round_to_raster(min_tau2, system.block_duration_raster),
-        round_to_raster(min_tau3, system.block_duration_raster),
+    min_te = (
+        2
+        * max(
+            round_to_raster(min_tau1, system.block_duration_raster),
+            round_to_raster(min_tau2, system.block_duration_raster),
+            round_to_raster(min_tau3, system.block_duration_raster),
+        ).item()
     )
+
     # calculate echo time delay (te_delay)
     te = min_te if te is None else round_to_raster(te, system.block_duration_raster)
     if te < min_te:
@@ -336,7 +340,7 @@ def main(
     if show_plots:
         seq.plot(time_range=(0, tr * 2))
 
-    return seq
+    return seq, output_path / filename
 
 
 if __name__ == '__main__':
