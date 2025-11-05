@@ -126,6 +126,9 @@ def t2_tse_kernel(
     # phase encoding
     gy_areas = (np.arange(n_phase_encoding) - n_phase_encoding // 2) * delta_k
 
+    # phase encoding along slice direction
+    gz_areas = (np.arange(n_slice_encoding) - n_slice_encoding // 2) * 1 / fov_z
+
     # create crusher gradients
     gz_crush = pp.make_trapezoid(channel='z', system=system, area=gz_crusher_area, duration=gz_crusher_duration)
 
@@ -176,52 +179,63 @@ def t2_tse_kernel(
     print(f'\nCurrent echo time = {(te) * 1000:.2f} ms')
 
     # add all events to the sequence
-    for pe in range(n_phase_encoding):
-        pe_label = pp.make_label(type='SET', label='LIN', value=int(pe))
+    for se in range(n_slice_encoding):
+        se_label = pp.make_label(type='SET', label='PAR', value=int(se))
 
-        # phase encoding along pe
-        gy_pre = pp.make_trapezoid(
-            channel='y',
-            area=gy_areas[pe],
+        # phase encoding along se
+        gz_pre = pp.make_trapezoid(
+            channel='z',
+            area=gz_areas[se],
             duration=pp.calc_duration(gx_pre),
             system=system,
         )
 
-        _start_time_tr_block = sum(seq.block_durations.values())
+        for pe in range(n_phase_encoding):
+            pe_label = pp.make_label(type='SET', label='LIN', value=int(pe))
 
-        # add excitation pulse
-        seq.add_block(rf_ex, gz_ex)
-        seq.add_block(gzr_ex)
-        seq.add_block(pp.make_delay(tau1))
+            # phase encoding along pe
+            gy_pre = pp.make_trapezoid(
+                channel='y',
+                area=gy_areas[pe],
+                duration=pp.calc_duration(gx_pre),
+                system=system,
+            )
 
-        for echo in range(n_echoes):
-            echo_label = pp.make_label(type='SET', label='ECO', value=int(echo))
+            _start_time_tr_block = sum(seq.block_durations.values())
 
-            # add refocusing pulse with crusher gradients
-            seq.add_block(gz_crush)
-            seq.add_block(rf_ref, gz_ref)
-            seq.add_block(gz_crush)
+            # add excitation pulse
+            seq.add_block(rf_ex, gz_ex)
+            seq.add_block(gzr_ex)
+            seq.add_block(pp.make_delay(tau1))
 
-            seq.add_block(pp.make_delay(tau2))
+            for echo in range(n_echoes):
+                echo_label = pp.make_label(type='SET', label='ECO', value=int(echo))
 
-            # add pre gradients and all labels
-            label_contents = [pe_label, echo_label]
-            seq.add_block(gx_pre, gy_pre)
+                # add refocusing pulse with crusher gradients
+                seq.add_block(gz_crush)
+                seq.add_block(rf_ref, gz_ref)
+                seq.add_block(gz_crush)
 
-            # readout gradient and adc
-            seq.add_block(gx, adc, *label_contents)
+                seq.add_block(pp.make_delay(tau2))
 
-            # rewind gradients
-            seq.add_block(gx_post, pp.scale_grad(gy_pre, -1))
+                # add pre gradients and all labels
+                label_contents = [se_label, pe_label, echo_label]
+                seq.add_block(gx_pre, gy_pre, gz_pre)
 
-            if echo < n_echoes - 1:
-                seq.add_block(pp.make_delay(tau3))
+                # readout gradient and adc
+                seq.add_block(gx, adc, *label_contents)
 
-        duration_tr_block = sum(seq.block_durations.values()) - _start_time_tr_block
-        tr_delay = round_to_raster(tr - duration_tr_block, system.block_duration_raster)
-        if tr_delay < 0:
-            raise ValueError('Desired TR too short for given sequence parameters.')
-        seq.add_block(pp.make_delay(tr_delay))
+                # rewind gradients
+                seq.add_block(gx_post, pp.scale_grad(gy_pre, -1), pp.scale_grad(gz_pre, -1))
+
+                if echo < n_echoes - 1:
+                    seq.add_block(pp.make_delay(tau3))
+
+            duration_tr_block = sum(seq.block_durations.values()) - _start_time_tr_block
+            tr_delay = round_to_raster(tr - duration_tr_block, system.block_duration_raster)
+            if tr_delay < 0:
+                raise ValueError('Desired TR too short for given sequence parameters.')
+            seq.add_block(pp.make_delay(tr_delay))
 
     return seq, min_te
 
@@ -232,9 +246,10 @@ def main(
     n_echoes: int = 10,
     tr: float = 4,
     fov_xy: float = 128e-3,
+    fov_z: float = 80e-3,
     n_readout: int = 128,
     n_phase_encoding: int = 128,
-    fov_z: float = 8e-3,
+    n_sclice_encoding=10,
     show_plots: bool = True,
     test_report: bool = True,
     timing_check: bool = True,
@@ -253,12 +268,14 @@ def main(
         Desired repetition time (TR) (in seconds).
     fov_xy
         Field of view in x and y direction (in meters).
+    fov_z
+        Field of view along z (in meters).
     n_readout
         Number of frequency encoding steps.
     n_phase_encoding
         Number of phase encoding steps.
-    fov_z
-        Field of view along z (in meters).
+    n_slice_encoding
+        Number of phase encoding steps along the slice direction.
     show_plots
         Toggles sequence plot.
     test_report
@@ -269,8 +286,6 @@ def main(
     if system is None:
         system = sys_defaults
 
-    n_sclice_encoding = 1
-
     # define ADC and gradient timing
     readout_oversampling = 2
     adc_dwell = system.grad_raster_time
@@ -278,7 +293,7 @@ def main(
     gx_flat_time = n_readout * adc_dwell  # flat time of readout gradient [s]
 
     gz_crusher_duration = 1.6e-3  # duration of crusher gradients [s]
-    gz_crusher_area = 4 / fov_z
+    gz_crusher_area = 4 / (fov_z / n_sclice_encoding)
 
     # define settings of rf excitation pulse
     rf_ex_duration = 2e-3  # duration of the rf excitation pulse [s]
@@ -331,6 +346,7 @@ def main(
     te_list = np.cumsum((te,) * n_echoes if te else (min_te,) * n_echoes)
     seq.set_definition('TE', te_list.tolist())
     seq.set_definition('TR', tr)
+    seq.set_definition('ReadoutOversamplingFactor', readout_oversampling)
 
     # save seq-file to disk
     output_path = Path.cwd() / 'output'
