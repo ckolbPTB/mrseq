@@ -328,7 +328,8 @@ def main(
     # write all required parameters in the seq-file header/definitions
     seq.set_definition('FOV', [fov_xy, fov_xy, fov_z])
     seq.set_definition('ReconMatrix', (n_readout, n_readout, 1))
-    seq.set_definition('TE', te or min_te)
+    te_list = np.cumsum((te,) * n_echoes if te else (min_te,) * n_echoes)
+    seq.set_definition('TE', te_list.tolist())
     seq.set_definition('TR', tr)
 
     # save seq-file to disk
