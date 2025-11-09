@@ -11,6 +11,7 @@ from mrseq.utils import MultiEchoAcquisition
 from mrseq.utils import find_gx_flat_time_on_adc_raster
 from mrseq.utils import round_to_raster
 from mrseq.utils import sys_defaults
+from mrseq.utils.constants import GOLDEN_ANGLE_HALF_CIRCLE
 from mrseq.utils.create_ismrmrd_header import Fov
 from mrseq.utils.create_ismrmrd_header import Limits
 from mrseq.utils.create_ismrmrd_header import MatrixSize
@@ -113,7 +114,13 @@ def grpe_flash_dixon_kernel(
         Shortest possible repetition time.
 
     """
-    spoke_angle = np.pi * 0.618034
+    if readout_oversampling < 1:
+        raise ValueError('Readout oversampling factor must be >= 1.')
+
+    if n_dummy_spokes < 0:
+        raise ValueError('Number of dummy spokes must be >= 0.')
+
+    spoke_angle = GOLDEN_ANGLE_HALF_CIRCLE
     rpe_radial_shift = [0, 0.5, 0.25, 0.75]
 
     if partial_echo_factor > 1 or partial_echo_factor < 0.5:
@@ -187,7 +194,7 @@ def grpe_flash_dixon_kernel(
         + multi_echo_gradient._gx.delay  # potential delay of readout gradient
         + multi_echo_gradient._gx.rise_time  # rise time of readout gradient
         + (multi_echo_gradient._n_readout_pre_echo + 0.5) * multi_echo_gradient._adc.dwell
-    )
+    ).item()
 
     # calculate echo time delay (te_delay)
     te_delay = 0 if te is None else round_to_raster(te - min_te, system.block_duration_raster)
@@ -201,7 +208,7 @@ def grpe_flash_dixon_kernel(
         + pp.calc_duration(multi_echo_gradient._gx) * n_echoes  # readout gradient
         + pp.calc_duration(multi_echo_gradient._gx_between) * (n_echoes - 1)  # readout gradient
         + pp.calc_duration(gx_spoil, multi_echo_gradient._gx_post)  # gradient spoiler or readout-re-winder
-    )
+    ).item()
 
     # calculate repetition time delay (tr_delay)
     current_min_tr = min_tr + te_delay
@@ -236,7 +243,7 @@ def grpe_flash_dixon_kernel(
         prot.write_xml_header(hdr.toXML('utf-8'))
 
     # obtain noise samples
-    seq.add_block(pp.make_label(label='LIN', type='SET', value=0), pp.make_label(label='SLC', type='SET', value=0))
+    seq.add_block(pp.make_label(label='LIN', type='SET', value=0), pp.make_label(label='PAR', type='SET', value=0))
     seq.add_block(multi_echo_gradient._adc, pp.make_label(label='NOISE', type='SET', value=True))
     seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))
     seq.add_block(pp.make_delay(system.rf_dead_time))
@@ -343,6 +350,62 @@ def grpe_flash_dixon_kernel(
                         acq.resize(trajectory_dimensions=3, number_of_samples=multi_echo_gradient._adc.num_samples)
                         acq.traj[:] = grpe_trajectory
                         prot.append_acquisition(acq)
+
+    # obtain echoes with positive and negative gradient polarity to be able to correct for any misalignment
+    seq.add_block(pp.make_label(label='NAV', type='SET', value=True))
+    for _ in range(4):
+        for polarity in ['positive', 'negative']:
+            # set rf pulse properties and add rf pulse block event
+            if rf_spoiling_phase_increment > 0:
+                rf.phase_offset = rf_phase / 180 * np.pi
+                multi_echo_gradient._adc.phase_offset = rf_phase / 180 * np.pi
+
+            # add rf pulse
+            seq.add_block(rf, gz)
+
+            # update rf pulse properties for the next loop
+            rf_inc = divmod(rf_inc + rf_spoiling_phase_increment, 360.0)[1]
+            rf_phase = divmod(rf_phase + rf_inc, 360.0)[1]
+
+            seq.add_block(
+                multi_echo_gradient._gx_pre
+                if polarity == 'positive'
+                else pp.scale_grad(multi_echo_gradient._gx_pre, -1)
+            )
+
+            # add delay due to TE
+            if te_delay > 0:
+                seq.add_block(pp.make_delay(te_delay))
+
+            # add readout gradients and ADCs
+            seq, _ = multi_echo_gradient.add_to_seq_without_pre_post_gradient(seq, n_echoes, polarity)
+
+            # add spoiler gradients
+            seq.add_block(gx_spoil)
+
+            # add delay in case TR > min_TR
+            if tr_delay > 0:
+                seq.add_block(pp.make_delay(tr_delay))
+
+            if mrd_header_file:
+                # add acquisitions to metadata
+                k0_trajectory = np.linspace(
+                    -multi_echo_gradient._n_readout_pre_echo,
+                    multi_echo_gradient._n_readout_post_echo,
+                    multi_echo_gradient._n_readout_with_partial_echo,
+                )
+                grpe_trajectory = np.zeros((multi_echo_gradient._n_readout_with_partial_echo, 3), dtype=np.float32)
+
+                for echo_ in range(n_echoes):
+                    gx_sign = (-1) ** echo_ if polarity == 'positive' else (-1) ** (echo_ + 1)
+                    grpe_trajectory[:, 0] = k0_trajectory[::gx_sign]
+
+                    acq = ismrmrd.Acquisition()
+                    acq.resize(trajectory_dimensions=3, number_of_samples=multi_echo_gradient._adc.num_samples)
+                    acq.traj[:] = grpe_trajectory
+                    prot.append_acquisition(acq)
+
+    seq.add_block(pp.make_label(label='NAV', type='SET', value=False))
 
     # close ISMRMRD file
     if mrd_header_file:
@@ -503,7 +566,7 @@ def main(
     if show_plots:
         seq.plot(time_range=(0, (n_dummy_spokes * n_rpe_points + 20) * (tr or min_tr)))
 
-    return seq
+    return seq, output_path / filename
 
 
 if __name__ == '__main__':

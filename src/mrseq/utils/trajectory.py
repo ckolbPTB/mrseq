@@ -201,7 +201,7 @@ class MultiEchoAcquisition:
                 f'Delta TE must be larger than {min_delta_te * 1000:.2f} ms. Current value is {delta_te * 1000:.2f} ms.'
             )
 
-    def add_to_seq(self, seq: pp.Sequence, n_echoes: int):
+    def add_to_seq(self, seq: pp.Sequence, n_echoes: int, polarity: Literal['positive', 'negative'] = 'positive'):
         """Add all gradients and adc to sequence.
 
         Parameters
@@ -210,6 +210,8 @@ class MultiEchoAcquisition:
             PyPulseq Sequence object.
         n_echoes
             Number of echoes
+        polarity
+            Polarity of first readout gradient
 
         Returns
         -------
@@ -219,17 +221,19 @@ class MultiEchoAcquisition:
             Time from beginning of sequence to echoes.
         """
         # readout pre-winder
-        seq.add_block(self._gx_pre)
+        seq.add_block(self._gx_pre if polarity == 'positive' else pp.scale_grad(self._gx_pre, -1))
 
         # add readout gradients and ADCs
-        seq, time_to_echoes = self.add_to_seq_without_pre_post_gradient(seq, n_echoes)
+        seq, time_to_echoes = self.add_to_seq_without_pre_post_gradient(seq, n_echoes, polarity)
 
         # readout re-winder
-        seq.add_block(self._gx_post)
+        seq.add_block(self._gx_post if polarity == 'positive' else pp.scale_grad(self._gx_post, -1))
 
         return seq, time_to_echoes
 
-    def add_to_seq_without_pre_post_gradient(self, seq: pp.Sequence, n_echoes: int):
+    def add_to_seq_without_pre_post_gradient(
+        self, seq: pp.Sequence, n_echoes: int, polarity: Literal['positive', 'negative'] = 'positive'
+    ):
         """Add readout gradients without pre- and re-winder gradients.
 
         Often the pre- and re-winder gradients are played out at the same time as phase encoding gradients or spoiler
@@ -241,6 +245,8 @@ class MultiEchoAcquisition:
             PyPulseq Sequence object.
         n_echoes
             Number of echoes
+        polarity
+            Polarity of first readout gradient
 
         Returns
         -------
@@ -253,9 +259,8 @@ class MultiEchoAcquisition:
         time_to_echoes = []
         for echo_ in range(n_echoes):
             start_of_current_gx = sum(seq.block_durations.values())
-            gx_sign = (-1) ** echo_
+            gx_sign = (-1) ** echo_ if polarity == 'positive' else (-1) ** (echo_ + 1)
             labels = []
-            labels.append(pp.make_label(type='SET', label='REV', value=gx_sign == -1))
             labels.append(pp.make_label(label='REV', type='SET', value=gx_sign == -1))
             labels.append(pp.make_label(label='ECO', type='SET', value=echo_))
             seq.add_block(pp.scale_grad(self._gx, gx_sign), self._adc, *labels)

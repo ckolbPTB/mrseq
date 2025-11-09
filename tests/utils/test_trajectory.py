@@ -95,7 +95,10 @@ def test_multi_gradient_echo_error_on_short_delta_te(system_defaults):
 @pytest.mark.parametrize('readout_oversampling', [1, 1.5, 2])
 @pytest.mark.parametrize('n_readout', [64, 128, 200])
 @pytest.mark.parametrize('partial_echo_factor', [1.0, 0.8, 0.7])
-def test_multi_gradient_echo_timing(n_echoes, readout_oversampling, n_readout, partial_echo_factor, system_defaults):
+@pytest.mark.parametrize('polarity', ['positive', 'negative'])
+def test_multi_gradient_echo_timing(
+    n_echoes, readout_oversampling, n_readout, partial_echo_factor, polarity, system_defaults
+):
     """Test that zero crossing of gradient moment coincides with echo time and correct adc sample."""
     seq = pp.Sequence(system=system_defaults)
     mecho = MultiEchoAcquisition(
@@ -104,7 +107,7 @@ def test_multi_gradient_echo_timing(n_echoes, readout_oversampling, n_readout, p
         readout_oversampling=readout_oversampling,
         partial_echo_factor=partial_echo_factor,
     )
-    seq, time_to_echoes = mecho.add_to_seq(seq, n_echoes)
+    seq, time_to_echoes = mecho.add_to_seq(seq, n_echoes, polarity)
 
     from scipy.signal import argrelextrema
 

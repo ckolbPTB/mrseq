@@ -3,12 +3,12 @@
 import pytest
 from mrseq.scripts.grpe_flash_dixon import main as create_seq
 
-EXPECTED_DUR = 17.75664  # defined 2025-10-05
+EXPECTED_DUR = 17.84831  # defined 2025-11-09
 
 
 def test_default_seq_duration(system_defaults):
     """Test if default values result in expected sequence duration."""
-    seq = create_seq(system=system_defaults, show_plots=False)
+    seq, _ = create_seq(system=system_defaults, show_plots=False)
     duration = seq.duration()[0]
     assert duration == pytest.approx(EXPECTED_DUR)
 
@@ -21,7 +21,7 @@ def test_seq_creation_error_on_short_tr(system_defaults):
 
 def test_seq_duration_vary_params_without_effect(system_defaults):
     """Test if sequence duration is as expected."""
-    seq = create_seq(
+    seq, _ = create_seq(
         system=system_defaults,
         n_rpe_points_per_shot=4,  # default 8
         show_plots=False,
