@@ -1,4 +1,4 @@
-"""Turbo-spin echo sequence for T2 mapping."""
+"""Cartesian turbo-spin echo sequence for T2 mapping."""
 
 from pathlib import Path
 
@@ -9,7 +9,7 @@ from mrseq.utils import round_to_raster
 from mrseq.utils import sys_defaults
 
 
-def t2_tse_kernel(
+def t2_tse_cartesian_kernel(
     system: pp.Opts,
     te: float | None,
     n_echoes: int,
@@ -249,7 +249,7 @@ def main(
     fov_z: float = 80e-3,
     n_readout: int = 128,
     n_phase_encoding: int = 128,
-    n_sclice_encoding=10,
+    n_slice_encoding=10,
     show_plots: bool = True,
     test_report: bool = True,
     timing_check: bool = True,
@@ -293,7 +293,7 @@ def main(
     gx_flat_time = n_readout * adc_dwell  # flat time of readout gradient [s]
 
     gz_crusher_duration = 1.6e-3  # duration of crusher gradients [s]
-    gz_crusher_area = 4 / (fov_z / n_sclice_encoding)
+    gz_crusher_area = 4 / (fov_z / n_slice_encoding)
 
     # define settings of rf excitation pulse
     rf_ex_duration = 2e-3  # duration of the rf excitation pulse [s]
@@ -301,7 +301,7 @@ def main(
 
     rf_ref_width_scale_factor = 3.5  # width of refocusing pulse is increased compared to excitation pulse
 
-    seq, min_te = t2_tse_kernel(
+    seq, min_te = t2_tse_cartesian_kernel(
         system=system,
         te=te,
         n_echoes=n_echoes,
@@ -310,7 +310,7 @@ def main(
         fov_z=fov_z,
         n_readout=n_readout,
         n_phase_encoding=n_phase_encoding,
-        n_slice_encoding=n_sclice_encoding,
+        n_slice_encoding=n_slice_encoding,
         gx_pre_duration=gx_pre_duration,
         gx_flat_time=gx_flat_time,
         rf_ex_duration=rf_ex_duration,

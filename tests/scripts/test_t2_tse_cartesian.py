@@ -1,7 +1,7 @@
 """Turbo-spin echo sequence for T2 mapping."""
 
 import pytest
-from mrseq.scripts.t2_tse import main as create_seq
+from mrseq.scripts.t2_tse_cartesian import main as create_seq
 
 EXPECTED_DUR = 512.000000  # defined 2025-10-08
 
