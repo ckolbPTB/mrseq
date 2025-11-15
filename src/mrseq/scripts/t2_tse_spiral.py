@@ -1,15 +1,22 @@
-"""Cartesian turbo-spin echo sequence for T2 mapping."""
+"""Spiral turbo-spin echo sequence for T2 mapping."""
 
 from pathlib import Path
+from typing import Literal
 
+import ismrmrd
 import numpy as np
 import pypulseq as pp
 
 from mrseq.utils import round_to_raster
+from mrseq.utils import spiral_acquisition
 from mrseq.utils import sys_defaults
+from mrseq.utils.ismrmrd import Fov
+from mrseq.utils.ismrmrd import Limits
+from mrseq.utils.ismrmrd import MatrixSize
+from mrseq.utils.ismrmrd import create_header
 
 
-def t2_tse_cartesian_kernel(
+def t2_tse_spiral_kernel(
     system: pp.Opts,
     te: float | None,
     n_echoes: int,
@@ -17,20 +24,20 @@ def t2_tse_cartesian_kernel(
     fov_xy: float,
     fov_z: float,
     n_readout: int,
-    n_phase_encoding: int,
+    readout_oversampling: Literal[1, 2, 4],
+    spiral_undersampling: float,
     n_slice_encoding: int,
     gx_pre_duration: float,
-    gx_flat_time: float,
     rf_ex_duration: float,
     rf_ex_bwt: float,
     rf_ref_duration: float,
     rf_ref_bwt: float,
     rf_ref_width_scale_factor: float,
-    readout_oversampling: int,
     gz_crusher_duration: float,
     gz_crusher_area: float,
+    mrd_header_file: str | None,
 ) -> tuple[pp.Sequence, float]:
-    """Generate a Cartesian TSE sequence for T2-mapping.
+    """Generate a spiral TSE sequence for T2-mapping.
 
     Parameters
     ----------
@@ -48,14 +55,14 @@ def t2_tse_cartesian_kernel(
         Field of view in the z direction (slice thickness) in meters.
     n_readout
         Number of frequency encoding steps.
-    n_phase_encoding
-        Number of phase encoding steps.
+    readout_oversampling
+        Readout oversampling. Determines the number of ADC samples along a spiral and the bandwidth.
+    spiral_undersampling
+        Angular undersampling of the spiral trajectoy.
     n_slice_encoding
         Number of slice encoding steps.
     gx_pre_duration
-        Duration of the readout pre-winder gradient in seconds.
-    gx_flat_time
-        Flat time of the readout gradient in seconds.
+        Duration of the readout pre-winder gradient in seconds..
     rf_ex_duration
         Duration of the excitation RF pulse in seconds.
     rf_ex_bwt
@@ -72,6 +79,8 @@ def t2_tse_cartesian_kernel(
         Duration of the crusher gradients applied around the 180° pulse.
     gz_crusher_area : float
         Area (zeroth gradient moment) of the crusher gradients applied around the 180° pulse.
+    mrd_header_file
+        Filename of the ISMRMRD header file to be created. If None, no header file is created.
 
     Returns
     -------
@@ -112,21 +121,16 @@ def t2_tse_cartesian_kernel(
     )
 
     # create readout gradient and ADC
-    delta_k = 1 / fov_xy
-    gx = pp.make_trapezoid(channel='x', flat_area=n_readout * delta_k, flat_time=gx_flat_time, system=system)
-    n_readout_with_oversampling = int(n_readout * readout_oversampling)
-    n_readout_with_oversampling = n_readout_with_oversampling + np.mod(n_readout_with_oversampling, 2)  # make even
-    adc = pp.make_adc(num_samples=n_readout_with_oversampling, duration=gx.flat_time, delay=gx.rise_time, system=system)
-
-    # create frequency encoding pre- and re-winder gradient
-    gx_pre = pp.make_trapezoid(channel='x', area=-gx.area / 2 - delta_k / 2, duration=gx_pre_duration, system=system)
-    gx_post = pp.make_trapezoid(channel='x', area=-gx.area / 2 + delta_k / 2, duration=gx_pre_duration, system=system)
-    k0_center_id = np.where((np.arange(n_readout_with_oversampling) - n_readout_with_oversampling / 2) * delta_k == 0)[
-        0
-    ][0]
-
-    # phase encoding
-    gy_areas = (np.arange(n_phase_encoding) - n_phase_encoding // 2) * delta_k
+    gx, gy, adc, trajectory, time_to_echo = spiral_acquisition(
+        system,
+        n_readout,
+        fov_xy,
+        spiral_undersampling,
+        readout_oversampling=readout_oversampling,
+        n_spirals=None,
+        max_pre_duration=gx_pre_duration,
+        spiral_type='in-out',
+    )
 
     # phase encoding along slice direction
     gz_areas = (np.arange(n_slice_encoding) - n_slice_encoding // 2) * 1 / fov_z
@@ -146,17 +150,11 @@ def t2_tse_cartesian_kernel(
     # tau2: between refocusing pulses and readout
     min_tau2 = rf_ref.shape_dur / 2
     min_tau2 += max(rf_ref.ringdown_time, gz_ref.fall_time)
-    min_tau2 += pp.calc_duration(gx_pre)
-    min_tau2 += k0_center_id * adc.dwell
-    min_tau2 += adc.dwell / 2
-    min_tau2 += max(adc.delay, gx.delay + gx.rise_time)
+    min_tau2 += time_to_echo
     min_tau2 += pp.calc_duration(gz_crush)
 
     # tau3: between readout and next refocusing pulse
-    min_tau3 = k0_center_id * adc.dwell
-    min_tau3 -= adc.dwell / 2
-    min_tau3 += max(gx.fall_time, adc.dead_time)
-    min_tau3 += pp.calc_duration(gx_post)
+    min_tau3 = time_to_echo  # TODO double check
     min_tau3 += rf_ref.shape_dur / 2
     min_tau3 += max(rf_ref.delay, gz_ref.delay + gz_ref.rise_time)
     min_tau3 += pp.calc_duration(gz_crush)
@@ -180,11 +178,34 @@ def t2_tse_cartesian_kernel(
     tau3 = round_to_raster(te / 2 - min_tau3, raster_time=system.grad_raster_time)
     print(f'\nCurrent echo time = {(te) * 1000:.2f} ms')
 
+    # create header
+    if mrd_header_file:
+        hdr = create_header(
+            traj_type='other',
+            encoding_fov=Fov(x=fov_xy, y=fov_xy, z=fov_z),
+            recon_fov=Fov(x=fov_xy, y=fov_xy, z=fov_z),
+            encoding_matrix=MatrixSize(n_x=int(n_readout), n_y=int(n_readout), n_z=n_slice_encoding),
+            recon_matrix=MatrixSize(n_x=n_readout, n_y=n_readout, n_z=n_slice_encoding),
+            dwell_time=adc.dwell,
+            k1_limits=Limits(min=0, max=len(gx), center=0),
+            k2_limits=Limits(min=0, max=n_slice_encoding, center=n_slice_encoding // 2),
+            slice_limits=Limits(),
+        )
+
+        # write header to file
+        prot = ismrmrd.Dataset(mrd_header_file, 'w')
+        prot.write_xml_header(hdr.toXML('utf-8'))
+
     # obtain noise samples
     seq.add_block(pp.make_label(label='LIN', type='SET', value=0), pp.make_label(label='SLC', type='SET', value=0))
     seq.add_block(adc, pp.make_label(label='NOISE', type='SET', value=True))
     seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))
     seq.add_block(pp.make_delay(system.rf_dead_time))
+
+    if mrd_header_file:
+        acq = ismrmrd.Acquisition()
+        acq.resize(trajectory_dimensions=3, number_of_samples=adc.num_samples)
+        prot.append_acquisition(acq)
 
     # add all events to the sequence
     for se in range(n_slice_encoding):
@@ -194,20 +215,12 @@ def t2_tse_cartesian_kernel(
         gz_pre = pp.make_trapezoid(
             channel='z',
             area=gz_areas[se],
-            duration=pp.calc_duration(gx_pre),
+            duration=gx_pre_duration,
             system=system,
         )
 
-        for pe in range(n_phase_encoding):
-            pe_label = pp.make_label(type='SET', label='LIN', value=int(pe))
-
-            # phase encoding along pe
-            gy_pre = pp.make_trapezoid(
-                channel='y',
-                area=gy_areas[pe],
-                duration=pp.calc_duration(gx_pre),
-                system=system,
-            )
+        for spiral_ in range(len(gx)):
+            pe_label = pp.make_label(type='SET', label='LIN', value=spiral_)
 
             _start_time_tr_block = sum(seq.block_durations.values())
 
@@ -228,16 +241,28 @@ def t2_tse_cartesian_kernel(
 
                 # add pre gradients and all labels
                 labels = [se_label, pe_label, echo_label]
-                seq.add_block(gx_pre, gy_pre, gz_pre)
-
-                # readout gradient and adc
-                seq.add_block(gx, adc, *labels)
+                seq.add_block(gx[spiral_], gy[spiral_], gz_pre, adc, *labels)
 
                 # rewind gradients
-                seq.add_block(gx_post, pp.scale_grad(gy_pre, -1), pp.scale_grad(gz_pre, -1))
+                seq.add_block(pp.scale_grad(gz_pre, -1))
 
                 if echo < n_echoes - 1:
                     seq.add_block(pp.make_delay(tau3))
+
+                if mrd_header_file and spiral_ >= 0:
+                    # add acquisitions to metadata
+                    spiral_trajectory = np.zeros((trajectory.shape[1], 3), dtype=np.float32)
+
+                    # the spiral trajectory is calculated in units of delta_k.
+                    # For image reconstruction we use delta_k = 1
+                    spiral_trajectory[:, 0] = trajectory[spiral_, :, 0] * fov_xy
+                    spiral_trajectory[:, 1] = trajectory[spiral_, :, 1] * fov_xy
+                    spiral_trajectory[:, 2] = se - n_slice_encoding // 2
+
+                    acq = ismrmrd.Acquisition()
+                    acq.resize(trajectory_dimensions=3, number_of_samples=adc.num_samples)
+                    acq.traj[:] = spiral_trajectory
+                    prot.append_acquisition(acq)
 
             duration_tr_block = sum(seq.block_durations.values()) - _start_time_tr_block
             tr_delay = round_to_raster(tr - duration_tr_block, system.block_duration_raster)
@@ -256,13 +281,14 @@ def main(
     fov_xy: float = 128e-3,
     fov_z: float = 80e-3,
     n_readout: int = 128,
-    n_phase_encoding: int = 128,
+    readout_oversampling: Literal[1, 2, 4] = 2,
+    n_spiral_arms: int = 128,
     n_slice_encoding=10,
     show_plots: bool = True,
     test_report: bool = True,
     timing_check: bool = True,
 ) -> pp.Sequence:
-    """Generate Cartesian TSE sequence for T2-mapping.
+    """Generate spiral TSE sequence for T2-mapping.
 
     Parameters
     ----------
@@ -280,8 +306,10 @@ def main(
         Field of view along z (in meters).
     n_readout
         Number of frequency encoding steps.
-    n_phase_encoding
-        Number of phase encoding steps.
+    readout_oversampling
+        Readout oversampling. Determines the number of ADC samples along a spiral and the bandwidth.
+    n_spiral_arms
+        Number of spiral arms.
     n_slice_encoding
         Number of phase encoding steps along the slice direction.
     show_plots
@@ -295,10 +323,7 @@ def main(
         system = sys_defaults
 
     # define ADC and gradient timing
-    readout_oversampling = 2
-    adc_dwell = system.grad_raster_time
     gx_pre_duration = 1.0e-3  # duration of readout pre-winder gradient [s]
-    gx_flat_time = n_readout * adc_dwell  # flat time of readout gradient [s]
 
     gz_crusher_duration = 1.6e-3  # duration of crusher gradients [s]
     gz_crusher_area = 4 / (fov_z / n_slice_encoding)
@@ -309,7 +334,18 @@ def main(
 
     rf_ref_width_scale_factor = 3.5  # width of refocusing pulse is increased compared to excitation pulse
 
-    seq, min_te = t2_tse_cartesian_kernel(
+    # define sequence filename
+    filename = f'{Path(__file__).stem}_{int(fov_xy * 1000)}fov_xy_{int(fov_z * 1000)}_fov_z_'
+    filename += f'{n_readout}nx_{n_spiral_arms}na_{n_slice_encoding}nz'
+
+    output_path = Path.cwd() / 'output'
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # delete existing header file
+    if (output_path / Path(filename + '_header.h5')).exists():
+        (output_path / Path(filename + '_header.h5')).unlink()
+
+    seq, min_te = t2_tse_spiral_kernel(
         system=system,
         te=te,
         n_echoes=n_echoes,
@@ -317,18 +353,18 @@ def main(
         fov_xy=fov_xy,
         fov_z=fov_z,
         n_readout=n_readout,
-        n_phase_encoding=n_phase_encoding,
+        readout_oversampling=readout_oversampling,
+        spiral_undersampling=n_readout / n_spiral_arms,
         n_slice_encoding=n_slice_encoding,
         gx_pre_duration=gx_pre_duration,
-        gx_flat_time=gx_flat_time,
         rf_ex_duration=rf_ex_duration,
         rf_ex_bwt=rf_ex_bwt,
         rf_ref_duration=rf_ex_duration * 2,
         rf_ref_bwt=rf_ex_bwt,
         rf_ref_width_scale_factor=rf_ref_width_scale_factor,
-        readout_oversampling=readout_oversampling,
         gz_crusher_duration=gz_crusher_duration,
         gz_crusher_area=gz_crusher_area,
+        mrd_header_file=output_path / Path(filename + '_header.h5'),
     )
 
     # check timing of the sequence
@@ -345,20 +381,14 @@ def main(
         print('\nCreating advanced test report...')
         print(seq.test_report())
 
-    # define sequence filename
-    filename = f'{Path(__file__).stem}_{int(fov_xy * 1000)}fov_{n_readout}nx_{n_phase_encoding}ny'
-
     # write all required parameters in the seq-file header/definitions
     seq.set_definition('FOV', [fov_xy, fov_xy, fov_z])
     seq.set_definition('ReconMatrix', (n_readout, n_readout, 1))
     te_list = np.cumsum((te,) * n_echoes if te else (min_te,) * n_echoes)
     seq.set_definition('TE', te_list.tolist())
     seq.set_definition('TR', tr)
-    seq.set_definition('ReadoutOversamplingFactor', readout_oversampling)
 
     # save seq-file to disk
-    output_path = Path.cwd() / 'output'
-    output_path.mkdir(parents=True, exist_ok=True)
     print(f"\nSaving sequence file '{filename}.seq' into folder '{output_path}'.")
     seq.write(str(output_path / filename), create_signature=True)
 
