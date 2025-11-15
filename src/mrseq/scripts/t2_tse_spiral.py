@@ -171,12 +171,12 @@ def t2_tse_spiral_kernel(
     # calculate echo time delay (te_delay)
     te = min_te if te is None else round_to_raster(te, system.block_duration_raster)
     if te < min_te:
-        raise ValueError(f'TE must be larger than {min_te * 1000:.2f} ms. Current value is {te * 1000:.2f} ms.')
+        raise ValueError(f'TE must be larger than {min_te * 1000:.3f} ms. Current value is {te * 1000:.3f} ms.')
 
     tau1 = round_to_raster(te / 2 - min_tau1, raster_time=system.grad_raster_time)
     tau2 = round_to_raster(te / 2 - min_tau2, raster_time=system.grad_raster_time)
     tau3 = round_to_raster(te / 2 - min_tau3, raster_time=system.grad_raster_time)
-    print(f'\nCurrent echo time = {(te) * 1000:.2f} ms')
+    print(f'\nCurrent echo time = {(te) * 1000:.3f} ms')
 
     # create header
     if mrd_header_file:
