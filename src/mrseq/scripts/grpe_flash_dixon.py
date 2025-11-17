@@ -199,7 +199,7 @@ def grpe_flash_dixon_kernel(
     # calculate echo time delay (te_delay)
     te_delay = 0 if te is None else round_to_raster(te - min_te, system.block_duration_raster)
     if not te_delay >= 0:
-        raise ValueError(f'TE must be larger than {min_te * 1000:.2f} ms. Current value is {te * 1000:.2f} ms.')
+        raise ValueError(f'TE must be larger than {min_te * 1000:.3f} ms. Current value is {te * 1000:.3f} ms.')
 
     # calculate minimum repetition time
     min_tr = (
@@ -215,10 +215,10 @@ def grpe_flash_dixon_kernel(
     tr_delay = 0 if tr is None else round_to_raster(tr - current_min_tr, system.block_duration_raster)
 
     if not tr_delay >= 0:
-        raise ValueError(f'TR must be larger than {current_min_tr * 1000:.2f} ms. Current value is {tr * 1000:.2f} ms.')
+        raise ValueError(f'TR must be larger than {current_min_tr * 1000:.3f} ms. Current value is {tr * 1000:.3f} ms.')
 
-    print(f'\nCurrent echo time = {(min_te + te_delay) * 1000:.2f} ms')
-    print(f'Current repetition time = {(current_min_tr + tr_delay) * 1000:.2f} ms')
+    print(f'\nCurrent echo time = {(min_te + te_delay) * 1000:.3f} ms')
+    print(f'Current repetition time = {(current_min_tr + tr_delay) * 1000:.3f} ms')
 
     # choose initial rf phase offset
     rf_phase = 0
