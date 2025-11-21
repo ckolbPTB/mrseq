@@ -297,7 +297,6 @@ def main(
     rf_duration = 1.28e-3  # duration of the rf excitation pulse [s]
     rf_bwt = 4  # bandwidth-time product of rf excitation pulse [Hz*s]
     rf_apodization = 0.5  # apodization factor of rf excitation pulse
-    readout_oversampling = 2  # readout oversampling factor, commonly 2. This reduces aliasing artifacts.
 
     # gradient timing
     gx_pre_duration = 1.0e-3  # duration of readout pre-winder gradient [s]
@@ -309,6 +308,7 @@ def main(
 
     # define sequence filename
     filename = f'{Path(__file__).stem}_{int(fov_xy * 1000)}fov_{n_readout}nx_{n_spiral_arms}na_{n_slices}ns'
+    filename += f'_{readout_oversampling}os'
 
     output_path = Path.cwd() / 'output'
     output_path.mkdir(parents=True, exist_ok=True)

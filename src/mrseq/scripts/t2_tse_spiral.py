@@ -10,6 +10,7 @@ import pypulseq as pp
 from mrseq.utils import round_to_raster
 from mrseq.utils import spiral_acquisition
 from mrseq.utils import sys_defaults
+from mrseq.utils.constants import GOLDEN_ANGLE_HALF_CIRCLE
 from mrseq.utils.ismrmrd import Fov
 from mrseq.utils.ismrmrd import Limits
 from mrseq.utils.ismrmrd import MatrixSize
@@ -131,6 +132,7 @@ def t2_tse_spiral_kernel(
         max_pre_duration=gx_pre_duration,
         spiral_type='in-out',
     )
+    delta_array = np.pi / len(gx) * np.arange(len(gx))  # angle difference between subsequent spirals
 
     # phase encoding along slice direction
     gz_areas = (np.arange(n_slice_encoding) - n_slice_encoding // 2) * 1 / fov_z
@@ -143,21 +145,22 @@ def t2_tse_spiral_kernel(
     min_tau1 = rf_ex.shape_dur / 2
     min_tau1 += max(rf_ex.ringdown_time, gz_ex.fall_time)
     min_tau1 += pp.calc_duration(gzr_ex)
+    min_tau1 += pp.calc_duration(gz_crush)
     min_tau1 += max(rf_ref.delay, gz_ref.delay + gz_ref.rise_time)
     min_tau1 += rf_ref.shape_dur / 2
-    min_tau1 += pp.calc_duration(gz_crush)
 
     # tau2: between refocusing pulses and readout
     min_tau2 = rf_ref.shape_dur / 2
     min_tau2 += max(rf_ref.ringdown_time, gz_ref.fall_time)
-    min_tau2 += time_to_echo
     min_tau2 += pp.calc_duration(gz_crush)
+    min_tau2 += time_to_echo
 
     # tau3: between readout and next refocusing pulse
-    min_tau3 = time_to_echo  # TODO double check
-    min_tau3 += rf_ref.shape_dur / 2
-    min_tau3 += max(rf_ref.delay, gz_ref.delay + gz_ref.rise_time)
+    min_tau3 = time_to_echo
+    min_tau3 += gx_pre_duration
     min_tau3 += pp.calc_duration(gz_crush)
+    min_tau3 += max(rf_ref.delay, gz_ref.delay + gz_ref.rise_time)
+    min_tau3 += rf_ref.shape_dur / 2
 
     min_te = (
         2
@@ -232,6 +235,13 @@ def t2_tse_spiral_kernel(
             for echo in range(n_echoes):
                 echo_label = pp.make_label(type='SET', label='ECO', value=int(echo))
 
+                # calculate theoretical golden angle rotation for current shot
+                golden_angle = np.mod(GOLDEN_ANGLE_HALF_CIRCLE * (spiral_ + echo * len(gx)), np.pi)
+
+                # find closest unique spiral to current golden angle rotation
+                diff = np.abs(delta_array - golden_angle)
+                spiral_idx = np.argmin(diff)
+
                 # add refocusing pulse with crusher gradients
                 seq.add_block(gz_crush)
                 seq.add_block(rf_ref, gz_ref)
@@ -241,7 +251,7 @@ def t2_tse_spiral_kernel(
 
                 # add pre gradients and all labels
                 labels = [se_label, pe_label, echo_label]
-                seq.add_block(gx[spiral_], gy[spiral_], gz_pre, adc, *labels)
+                seq.add_block(gx[spiral_idx], gy[spiral_idx], gz_pre, adc, *labels)
 
                 # rewind gradients
                 seq.add_block(pp.scale_grad(gz_pre, -1))
@@ -249,14 +259,14 @@ def t2_tse_spiral_kernel(
                 if echo < n_echoes - 1:
                     seq.add_block(pp.make_delay(tau3))
 
-                if mrd_header_file and spiral_ >= 0:
+                if mrd_header_file:
                     # add acquisitions to metadata
                     spiral_trajectory = np.zeros((trajectory.shape[1], 3), dtype=np.float32)
 
                     # the spiral trajectory is calculated in units of delta_k.
                     # For image reconstruction we use delta_k = 1
-                    spiral_trajectory[:, 0] = trajectory[spiral_, :, 0] * fov_xy
-                    spiral_trajectory[:, 1] = trajectory[spiral_, :, 1] * fov_xy
+                    spiral_trajectory[:, 0] = trajectory[spiral_idx, :, 0] * fov_xy
+                    spiral_trajectory[:, 1] = trajectory[spiral_idx, :, 1] * fov_xy
                     spiral_trajectory[:, 2] = se - n_slice_encoding // 2
 
                     acq = ismrmrd.Acquisition()
@@ -336,7 +346,7 @@ def main(
 
     # define sequence filename
     filename = f'{Path(__file__).stem}_{int(fov_xy * 1000)}fov_xy_{int(fov_z * 1000)}_fov_z_'
-    filename += f'{n_readout}nx_{n_spiral_arms}na_{n_slice_encoding}nz'
+    filename += f'{n_readout}nx_{n_spiral_arms}na_{n_slice_encoding}nz_var'
 
     output_path = Path.cwd() / 'output'
     output_path.mkdir(parents=True, exist_ok=True)

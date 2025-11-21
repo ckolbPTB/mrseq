@@ -139,27 +139,27 @@ def t2_tse_cartesian_kernel(
     min_tau1 = rf_ex.shape_dur / 2
     min_tau1 += max(rf_ex.ringdown_time, gz_ex.fall_time)
     min_tau1 += pp.calc_duration(gzr_ex)
+    min_tau1 += pp.calc_duration(gz_crush)
     min_tau1 += max(rf_ref.delay, gz_ref.delay + gz_ref.rise_time)
     min_tau1 += rf_ref.shape_dur / 2
-    min_tau1 += pp.calc_duration(gz_crush)
 
     # tau2: between refocusing pulses and readout
     min_tau2 = rf_ref.shape_dur / 2
     min_tau2 += max(rf_ref.ringdown_time, gz_ref.fall_time)
+    min_tau2 += pp.calc_duration(gz_crush)
     min_tau2 += pp.calc_duration(gx_pre)
     min_tau2 += k0_center_id * adc.dwell
     min_tau2 += adc.dwell / 2
     min_tau2 += max(adc.delay, gx.delay + gx.rise_time)
-    min_tau2 += pp.calc_duration(gz_crush)
 
     # tau3: between readout and next refocusing pulse
     min_tau3 = k0_center_id * adc.dwell
     min_tau3 -= adc.dwell / 2
     min_tau3 += max(gx.fall_time, adc.dead_time)
     min_tau3 += pp.calc_duration(gx_post)
-    min_tau3 += rf_ref.shape_dur / 2
-    min_tau3 += max(rf_ref.delay, gz_ref.delay + gz_ref.rise_time)
     min_tau3 += pp.calc_duration(gz_crush)
+    min_tau3 += max(rf_ref.delay, gz_ref.delay + gz_ref.rise_time)
+    min_tau3 += rf_ref.shape_dur / 2
 
     min_te = (
         2
@@ -346,7 +346,8 @@ def main(
         print(seq.test_report())
 
     # define sequence filename
-    filename = f'{Path(__file__).stem}_{int(fov_xy * 1000)}fov_{n_readout}nx_{n_phase_encoding}ny'
+    filename = f'{Path(__file__).stem}_{int(fov_xy * 1000)}fov_xy_{int(fov_z * 1000)}_fov_z_'
+    filename += f'{n_readout}nx_{n_phase_encoding}ny_{n_slice_encoding}nz'
 
     # write all required parameters in the seq-file header/definitions
     seq.set_definition('FOV', [fov_xy, fov_xy, fov_z])
