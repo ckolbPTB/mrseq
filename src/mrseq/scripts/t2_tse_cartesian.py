@@ -258,7 +258,7 @@ def main(
     show_plots: bool = True,
     test_report: bool = True,
     timing_check: bool = True,
-) -> pp.Sequence:
+) -> tuple[pp.Sequence, Path]:
     """Generate Cartesian TSE sequence for T2-mapping.
 
     Parameters

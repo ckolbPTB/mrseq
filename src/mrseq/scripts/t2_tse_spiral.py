@@ -145,20 +145,19 @@ def t2_tse_spiral_kernel(
     min_tau1 = rf_ex.shape_dur / 2
     min_tau1 += max(rf_ex.ringdown_time, gz_ex.fall_time)
     min_tau1 += pp.calc_duration(gzr_ex)
-    min_tau1 += pp.calc_duration(gz_crush)
+    min_tau1 += gz_crusher_duration
     min_tau1 += max(rf_ref.delay, gz_ref.delay + gz_ref.rise_time)
     min_tau1 += rf_ref.shape_dur / 2
 
     # tau2: between refocusing pulses and readout
     min_tau2 = rf_ref.shape_dur / 2
     min_tau2 += max(rf_ref.ringdown_time, gz_ref.fall_time)
-    min_tau2 += pp.calc_duration(gz_crush)
+    min_tau2 += gz_crusher_duration
     min_tau2 += time_to_echo
 
     # tau3: between readout and next refocusing pulse
     min_tau3 = time_to_echo
-    min_tau3 += gx_pre_duration
-    min_tau3 += pp.calc_duration(gz_crush)
+    min_tau3 += gz_crusher_duration
     min_tau3 += max(rf_ref.delay, gz_ref.delay + gz_ref.rise_time)
     min_tau3 += rf_ref.shape_dur / 2
 
@@ -212,11 +211,19 @@ def t2_tse_spiral_kernel(
         se_label = pp.make_label(type='SET', label='PAR', value=int(se))
 
         # phase encoding along se
-        gz_pre = pp.make_trapezoid(
+        gz_rew = pp.make_trapezoid(
             channel='z',
-            area=gz_areas[se],
+            area=-gz_areas[se],
             duration=gx_pre_duration,
             system=system,
+        )
+
+        # Combine phase encoding along se and crusher along z-direction
+        gz_crush_pre = pp.make_trapezoid(
+            channel='z', system=system, area=gz_crusher_area + gz_areas[se], duration=gz_crusher_duration
+        )
+        gz_crush_rew = pp.make_trapezoid(
+            channel='z', system=system, area=gz_crusher_area - gz_areas[se], duration=gz_crusher_duration
         )
 
         for spiral_ in range(len(gx)):
@@ -240,18 +247,15 @@ def t2_tse_spiral_kernel(
                 spiral_idx = np.argmin(diff)
 
                 # add refocusing pulse with crusher gradients
-                seq.add_block(gz_crush)
+                seq.add_block(gz_crush if echo == 0 else gz_crush_rew)
                 seq.add_block(rf_ref, gz_ref)
-                seq.add_block(gz_crush)
+                seq.add_block(gz_crush_pre)
 
                 seq.add_block(pp.make_delay(tau2))
 
                 # add pre gradients and all labels
                 labels = [se_label, pe_label, echo_label]
-                seq.add_block(gx[spiral_idx], gy[spiral_idx], gz_pre, adc, *labels)
-
-                # rewind gradients
-                seq.add_block(pp.scale_grad(gz_pre, -1))
+                seq.add_block(gx[spiral_idx], gy[spiral_idx], adc, *labels)
 
                 if echo < n_echoes - 1:
                     seq.add_block(pp.make_delay(tau3))
@@ -270,6 +274,9 @@ def t2_tse_spiral_kernel(
                     acq.resize(trajectory_dimensions=3, number_of_samples=adc.num_samples)
                     acq.traj[:] = spiral_trajectory
                     prot.append_acquisition(acq)
+
+            # Add final rewinder
+            seq.add_block(gz_rew)
 
             duration_tr_block = sum(seq.block_durations.values()) - _start_time_tr_block
             tr_delay = round_to_raster(tr - duration_tr_block, system.block_duration_raster)
@@ -294,7 +301,7 @@ def main(
     show_plots: bool = True,
     test_report: bool = True,
     timing_check: bool = True,
-) -> pp.Sequence:
+) -> tuple[pp.Sequence, Path]:
     """Generate spiral TSE sequence for T2-mapping.
 
     Parameters

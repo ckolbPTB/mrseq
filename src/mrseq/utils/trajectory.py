@@ -156,7 +156,7 @@ def spiral_acquisition(
         Oversampling factor for the readout trajectory.
     n_spirals
         Number of spirals to generate. If set to None, this value will be set based on the undersampling factor.
-    max_pre_duration : float
+    max_pre_duration
         Maximum duration for pre-winder gradients (in seconds).
     spiral_type
         Type of spiral acquisition. 'out' for outward spirals, 'in-out' for spirals turning in and then out.
@@ -269,7 +269,11 @@ def spiral_acquisition(
         adc.delay = max_pre_duration
 
         for i in range(len(gx_pre)):
+            if gy_pre[i].shape_dur > max_pre_duration:
+                raise ValueError('Duration of gx prewinder is too short.')
             gy_pre[i].delay = max_pre_duration - gy_pre[i].shape_dur
+            if gx_pre[i].shape_dur > max_pre_duration:
+                raise ValueError('Duration of gx prewinder is too short.')
             gx_pre[i].delay = max_pre_duration - gx_pre[i].shape_dur
     else:
         max_pre_duration = 0.0
