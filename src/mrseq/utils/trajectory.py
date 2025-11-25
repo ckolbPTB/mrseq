@@ -8,6 +8,58 @@ import pypulseq as pp
 from mrseq.utils import variable_density_spiral_trajectory
 
 
+def cartesian_phase_encoding(
+    n_phase_encoding: int,
+    acceleration: int = 1,
+    n_fully_sampled_center: int = 0,
+    sampling_order: Literal['linear', 'low_high', 'high_low', 'random'] = 'linear',
+) -> tuple[np.ndarray, np.ndarray]:
+    """Calculate Cartesian sampling trajectory.
+
+    Parameters
+    ----------
+    n_phase_encoding
+        number of phase encoding points before undersampling
+    acceleration
+        undersampling factor
+    n_fully_sampled_center
+        number of phsae encoding points in the fully sampled center. This will reduce the overall undersampling factor.
+    sampling_order
+        order how phase encoding points are sampled
+    """
+    if sampling_order == 'random':
+        # Linear order of a fully sampled kpe dimension. Undersampling is done later.
+        kpe = np.arange(0, n_phase_encoding)
+    else:
+        # Always include k-space center and more points on the negative side of k-space
+        kpe_pos = np.arange(0, n_phase_encoding // 2, acceleration)
+        kpe_neg = -np.arange(acceleration, n_phase_encoding // 2 + 1, acceleration)
+        kpe = np.concatenate((kpe_neg, kpe_pos), axis=0)
+
+    # Ensure fully sampled center
+    kpe_fully_sampled_center = np.arange(
+        -n_fully_sampled_center // 2, -n_fully_sampled_center // 2 + n_fully_sampled_center
+    )
+    kpe = np.unique(np.concatenate((kpe, kpe_fully_sampled_center)))
+
+    # Different temporal orders of phase encoding points
+    if sampling_order == 'random':
+        perm = np.random.permutation(kpe)
+        kpe = kpe[perm[: len(perm) // acceleration]]
+    elif sampling_order == 'linear':
+        kpe = np.sort(kpe)
+    elif sampling_order == 'low_high':
+        idx = np.argsort(np.abs(kpe), kind='stable')
+        kpe = kpe[idx]
+    elif sampling_order == 'high_low':
+        idx = np.argsort(-np.abs(kpe), kind='stable')
+        kpe = kpe[idx]
+    else:
+        raise ValueError(f'sampling order {sampling_order} not supported.')
+
+    return kpe, kpe_fully_sampled_center
+
+
 def undersampled_variable_density_spiral(system: pp.Opts, n_readout: int, fov: float, undersampling_factor: float):
     """Create undersampled variable density spiral.
 
@@ -86,7 +138,7 @@ def spiral_acquisition(
     readout_oversampling: Literal[1, 2, 4],
     n_spirals: int | None,
     max_pre_duration: float,
-    spiral_type=Literal['out', 'in-out'],
+    spiral_type: Literal['out', 'in-out'],
 ):
     """Generate a spiral acquisition sequence.
 
@@ -223,14 +275,14 @@ def spiral_acquisition(
         max_pre_duration = 0.0
 
     def combine_gradients(*grad_objects, channel):
-        grad_objects = [grad for grad in grad_objects if grad]  # Remove None
-        waveform_combined = np.concatenate([grad.waveform for grad in grad_objects])
+        grad_list = [grad for grad in grad_objects if grad is not None]  # Remove None
+        waveform_combined = np.concatenate([grad.waveform for grad in grad_list])
 
         return pp.make_arbitrary_grad(
             channel=channel,
             waveform=waveform_combined,
             first=0,
-            delay=grad_objects[0].delay,
+            delay=grad_list[0].delay,
             last=0,
             system=system,
         )

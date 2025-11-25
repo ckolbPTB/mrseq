@@ -36,7 +36,7 @@ def t2_tse_spiral_kernel(
     rf_ref_width_scale_factor: float,
     gz_crusher_duration: float,
     gz_crusher_area: float,
-    mrd_header_file: str | None,
+    mrd_header_file: str | Path | None,
 ) -> tuple[pp.Sequence, float]:
     """Generate a spiral TSE sequence for T2-mapping.
 
@@ -162,13 +162,10 @@ def t2_tse_spiral_kernel(
     min_tau3 += max(rf_ref.delay, gz_ref.delay + gz_ref.rise_time)
     min_tau3 += rf_ref.shape_dur / 2
 
-    min_te = (
-        2
-        * max(
-            round_to_raster(min_tau1, system.block_duration_raster),
-            round_to_raster(min_tau2, system.block_duration_raster),
-            round_to_raster(min_tau3, system.block_duration_raster),
-        ).item()
+    min_te = 2 * max(
+        round_to_raster(min_tau1, system.block_duration_raster),
+        round_to_raster(min_tau2, system.block_duration_raster),
+        round_to_raster(min_tau3, system.block_duration_raster),
     )
 
     # calculate echo time delay (te_delay)
