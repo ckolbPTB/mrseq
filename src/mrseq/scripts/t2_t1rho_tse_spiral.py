@@ -7,6 +7,7 @@ import ismrmrd
 import numpy as np
 import pypulseq as pp
 
+from mrseq.preparations import add_t1rho_prep
 from mrseq.utils import round_to_raster
 from mrseq.utils import spiral_acquisition
 from mrseq.utils import sys_defaults
@@ -19,6 +20,7 @@ from mrseq.utils.ismrmrd import create_header
 
 def t2_tse_spiral_kernel(
     system: pp.Opts,
+    spin_lock_times: np.ndarray,
     te: float | None,
     n_echoes: int,
     tr: float,
@@ -36,6 +38,11 @@ def t2_tse_spiral_kernel(
     rf_ref_width_scale_factor: float,
     gz_crusher_duration: float,
     gz_crusher_area: float,
+    rf_spin_lock_duration: float,
+    spin_lock_amplitude: float,
+    add_spin_lock_spoiler: bool,
+    spin_lock_spoiler_ramp_time: float,
+    spin_lock_spoiler_flat_time: float,
     mrd_header_file: str | Path | None,
 ) -> tuple[pp.Sequence, float]:
     """Generate a spiral TSE sequence for T2-mapping.
@@ -44,6 +51,8 @@ def t2_tse_spiral_kernel(
     ----------
     system
         PyPulseq system limits object.
+    spin_lock_times
+        Array of spin lock times (in seconds).
     te
         Desired echo time (TE) in seconds. Minimum echo time is used if set to None.
     n_echoes
@@ -80,6 +89,16 @@ def t2_tse_spiral_kernel(
         Duration of the crusher gradients applied around the 180° pulse.
     gz_crusher_area : float
         Area (zeroth gradient moment) of the crusher gradients applied around the 180° pulse.
+    rf_spin_lock_duration
+        Duration of 90° tip-down/tip-up pulses for spin lock preparation (in seconds).
+    spin_lock_amplitude
+        Amplitude of the spin-lock pulse (in T).
+    add_spin_lock_spoiler
+        Toggles addition of spoiler gradients after the spin lock pulse.
+    spin_lock_spoiler_ramp_time
+        Duration of gradient spoiler ramps (in seconds).
+    spin_lock_spoiler_flat_time
+        Duration of gradient spoiler plateau (in seconds).
     mrd_header_file
         Filename of the ISMRMRD header file to be created. If None, no header file is created.
 
@@ -207,88 +226,105 @@ def t2_tse_spiral_kernel(
         prot.append_acquisition(acq)
 
     # add all events to the sequence
-    for se in range(n_slice_encoding):
-        se_label = pp.make_label(type='SET', label='PAR', value=int(se))
+    for tsl_idx, tsl in enumerate(spin_lock_times):
+        # set set label for current spin lock time
+        set_label = pp.make_label(type='SET', label='SET', value=int(tsl_idx))
+        for se in range(n_slice_encoding):
+            se_label = pp.make_label(type='SET', label='PAR', value=int(se))
 
-        # phase encoding along se
-        gz_rew = pp.make_trapezoid(
-            channel='z',
-            area=-gz_areas[se],
-            duration=gx_pre_duration,
-            system=system,
-        )
+            # phase encoding along se
+            gz_rew = pp.make_trapezoid(
+                channel='z',
+                area=-gz_areas[se],
+                duration=gx_pre_duration,
+                system=system,
+            )
 
-        # Combine phase encoding along se and crusher along z-direction
-        gz_crush_pre = pp.make_trapezoid(
-            channel='z', system=system, area=gz_crusher_area + gz_areas[se], duration=gz_crusher_duration
-        )
-        gz_crush_rew = pp.make_trapezoid(
-            channel='z', system=system, area=gz_crusher_area - gz_areas[se], duration=gz_crusher_duration
-        )
+            # Combine phase encoding along se and crusher along z-direction
+            gz_crush_pre = pp.make_trapezoid(
+                channel='z', system=system, area=gz_crusher_area + gz_areas[se], duration=gz_crusher_duration
+            )
+            gz_crush_rew = pp.make_trapezoid(
+                channel='z', system=system, area=gz_crusher_area - gz_areas[se], duration=gz_crusher_duration
+            )
 
-        for spiral_ in range(len(gx)):
-            pe_label = pp.make_label(type='SET', label='LIN', value=spiral_)
+            for spiral_ in range(len(gx)):
+                pe_label = pp.make_label(type='SET', label='LIN', value=spiral_)
 
-            _start_time_tr_block = sum(seq.block_durations.values())
+                _start_time_tr_block = sum(seq.block_durations.values())
 
-            # add excitation pulse
-            seq.add_block(rf_ex, gz_ex)
-            seq.add_block(gzr_ex)
-            seq.add_block(pp.make_delay(tau1))
+                # add T1rho preparation block
+                if tsl > 0:
+                    seq, _ = add_t1rho_prep(
+                        seq=seq,
+                        system=system,
+                        duration_90=rf_spin_lock_duration,
+                        spin_lock_time=tsl,
+                        spin_lock_amplitude=spin_lock_amplitude,
+                        add_spoiler=add_spin_lock_spoiler,
+                        spoiler_ramp_time=spin_lock_spoiler_ramp_time,
+                        spoiler_flat_time=spin_lock_spoiler_flat_time,
+                    )
 
-            for echo in range(n_echoes):
-                echo_label = pp.make_label(type='SET', label='ECO', value=int(echo))
+                # add excitation pulse
+                seq.add_block(rf_ex, gz_ex)
+                seq.add_block(gzr_ex)
+                seq.add_block(pp.make_delay(tau1))
 
-                # calculate theoretical golden angle rotation for current shot
-                golden_angle = np.mod(GOLDEN_ANGLE_HALF_CIRCLE * (spiral_ + echo * len(gx)), np.pi)
+                for echo in range(n_echoes):
+                    echo_label = pp.make_label(type='SET', label='ECO', value=int(echo))
 
-                # find closest unique spiral to current golden angle rotation
-                diff = np.abs(delta_array - golden_angle)
-                spiral_idx = np.argmin(diff)
+                    # calculate theoretical golden angle rotation for current shot
+                    golden_angle = np.mod(GOLDEN_ANGLE_HALF_CIRCLE * (spiral_ + echo * len(gx)), np.pi)
 
-                # add refocusing pulse with crusher gradients
-                seq.add_block(gz_crush if echo == 0 else gz_crush_rew)
-                seq.add_block(rf_ref, gz_ref)
-                seq.add_block(gz_crush_pre)
+                    # find closest unique spiral to current golden angle rotation
+                    diff = np.abs(delta_array - golden_angle)
+                    spiral_idx = np.argmin(diff)
 
-                seq.add_block(pp.make_delay(tau2))
+                    # add refocusing pulse with crusher gradients
+                    seq.add_block(gz_crush if echo == 0 else gz_crush_rew)
+                    seq.add_block(rf_ref, gz_ref)
+                    seq.add_block(gz_crush_pre)
 
-                # add pre gradients and all labels
-                labels = [se_label, pe_label, echo_label]
-                seq.add_block(gx[spiral_idx], gy[spiral_idx], adc, *labels)
+                    seq.add_block(pp.make_delay(tau2))
 
-                if echo < n_echoes - 1:
-                    seq.add_block(pp.make_delay(tau3))
+                    # add pre gradients and all labels
+                    labels = [se_label, pe_label, echo_label, set_label]
+                    seq.add_block(gx[spiral_idx], gy[spiral_idx], adc, *labels)
 
-                if mrd_header_file:
-                    # add acquisitions to metadata
-                    spiral_trajectory = np.zeros((trajectory.shape[1], 3), dtype=np.float32)
+                    if echo < n_echoes - 1:
+                        seq.add_block(pp.make_delay(tau3))
 
-                    # the spiral trajectory is calculated in units of delta_k.
-                    # For image reconstruction we use delta_k = 1
-                    spiral_trajectory[:, 0] = trajectory[spiral_idx, :, 0] * fov_xy
-                    spiral_trajectory[:, 1] = trajectory[spiral_idx, :, 1] * fov_xy
-                    spiral_trajectory[:, 2] = se - n_slice_encoding // 2
+                    if mrd_header_file:
+                        # add acquisitions to metadata
+                        spiral_trajectory = np.zeros((trajectory.shape[1], 3), dtype=np.float32)
 
-                    acq = ismrmrd.Acquisition()
-                    acq.resize(trajectory_dimensions=3, number_of_samples=adc.num_samples)
-                    acq.traj[:] = spiral_trajectory
-                    prot.append_acquisition(acq)
+                        # the spiral trajectory is calculated in units of delta_k.
+                        # For image reconstruction we use delta_k = 1
+                        spiral_trajectory[:, 0] = trajectory[spiral_idx, :, 0] * fov_xy
+                        spiral_trajectory[:, 1] = trajectory[spiral_idx, :, 1] * fov_xy
+                        spiral_trajectory[:, 2] = se - n_slice_encoding // 2
 
-            # Add final rewinder
-            seq.add_block(gz_rew)
+                        acq = ismrmrd.Acquisition()
+                        acq.resize(trajectory_dimensions=3, number_of_samples=adc.num_samples)
+                        acq.traj[:] = spiral_trajectory
+                        prot.append_acquisition(acq)
 
-            duration_tr_block = sum(seq.block_durations.values()) - _start_time_tr_block
-            tr_delay = round_to_raster(tr - duration_tr_block, system.block_duration_raster)
-            if tr_delay < 0:
-                raise ValueError('Desired TR too short for given sequence parameters.')
-            seq.add_block(pp.make_delay(tr_delay))
+                # Add final rewinder
+                seq.add_block(gz_rew)
+
+                duration_tr_block = sum(seq.block_durations.values()) - _start_time_tr_block
+                tr_delay = round_to_raster(tr - duration_tr_block, system.block_duration_raster)
+                if tr_delay < 0:
+                    raise ValueError('Desired TR too short for given sequence parameters.')
+                seq.add_block(pp.make_delay(tr_delay))
 
     return seq, min_te
 
 
 def main(
     system: pp.Opts | None = None,
+    spin_lock_times: np.ndarray | None = None,
     te: float | None = None,
     n_echoes: int = 10,
     tr: float = 4,
@@ -308,6 +344,9 @@ def main(
     ----------
     system
         PyPulseq system limits object.
+    spin_lock_times
+        Array of spin lock times(in seconds).
+        Default values [0.025, 0.050, 0.1] s are used if set to None.
     te
         Desired echo time (TE) (in seconds). Minimum echo time is used if set to None.
     n_echoes
@@ -336,6 +375,16 @@ def main(
     if system is None:
         system = sys_defaults
 
+    if spin_lock_times is None:
+        spin_lock_times = np.array([0.025, 0.050, 0.1])
+
+    # define settings of spin-lock preparation pulse
+    rf_spin_lock_duration = 2e-3
+    spin_lock_amplitude = 5.0e-6
+    add_spin_lock_spoiler = True
+    spin_lock_spoiler_ramp_time = 6e-4
+    spin_lock_spoiler_flat_time = 8.4e-3
+
     # define ADC and gradient timing
     gx_pre_duration = 1.0e-3  # duration of readout pre-winder gradient [s]
 
@@ -361,6 +410,7 @@ def main(
 
     seq, min_te = t2_tse_spiral_kernel(
         system=system,
+        spin_lock_times=spin_lock_times,
         te=te,
         n_echoes=n_echoes,
         tr=tr,
@@ -378,6 +428,11 @@ def main(
         rf_ref_width_scale_factor=rf_ref_width_scale_factor,
         gz_crusher_duration=gz_crusher_duration,
         gz_crusher_area=gz_crusher_area,
+        rf_spin_lock_duration=rf_spin_lock_duration,
+        spin_lock_amplitude=spin_lock_amplitude,
+        add_spin_lock_spoiler=add_spin_lock_spoiler,
+        spin_lock_spoiler_ramp_time=spin_lock_spoiler_ramp_time,
+        spin_lock_spoiler_flat_time=spin_lock_spoiler_flat_time,
         mrd_header_file=output_path / Path(filename + '_header.h5'),
     )
 

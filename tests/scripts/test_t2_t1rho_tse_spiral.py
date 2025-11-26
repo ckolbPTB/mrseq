@@ -1,7 +1,7 @@
 """Tests for spiral turbo-spin echo sequence for T2 mapping."""
 
 import pytest
-from mrseq.scripts.t2_tse_spiral import main as create_seq
+from mrseq.scripts.t2_t1rho_tse_spiral import main as create_seq
 
 EXPECTED_DUR = 5120.0  # defined 2025-11-15
 
