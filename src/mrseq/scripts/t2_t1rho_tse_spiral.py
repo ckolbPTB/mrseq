@@ -18,7 +18,7 @@ from mrseq.utils.ismrmrd import MatrixSize
 from mrseq.utils.ismrmrd import create_header
 
 
-def t2_tse_spiral_kernel(
+def t2_t1rho_tse_spiral_kernel(
     system: pp.Opts,
     spin_lock_times: np.ndarray,
     te: float | None,
@@ -227,8 +227,6 @@ def t2_tse_spiral_kernel(
 
     # add all events to the sequence
     for tsl_idx, tsl in enumerate(spin_lock_times):
-        # set set label for current spin lock time
-        set_label = pp.make_label(type='SET', label='SET', value=int(tsl_idx))
         for se in range(n_slice_encoding):
             se_label = pp.make_label(type='SET', label='PAR', value=int(se))
 
@@ -272,10 +270,11 @@ def t2_tse_spiral_kernel(
                 seq.add_block(pp.make_delay(tau1))
 
                 for echo in range(n_echoes):
-                    echo_label = pp.make_label(type='SET', label='ECO', value=int(echo))
+                    contrast_label = pp.make_label(type='SET', label='ECO', value=int(echo + tsl_idx * n_echoes))
 
                     # calculate theoretical golden angle rotation for current shot
-                    golden_angle = np.mod(GOLDEN_ANGLE_HALF_CIRCLE * (spiral_ + echo * len(gx)), np.pi)
+                    angle_idx = spiral_ + echo * len(gx) + tsl_idx * len(gx) * n_echoes
+                    golden_angle = np.mod(GOLDEN_ANGLE_HALF_CIRCLE * angle_idx, np.pi)
 
                     # find closest unique spiral to current golden angle rotation
                     diff = np.abs(delta_array - golden_angle)
@@ -289,7 +288,7 @@ def t2_tse_spiral_kernel(
                     seq.add_block(pp.make_delay(tau2))
 
                     # add pre gradients and all labels
-                    labels = [se_label, pe_label, echo_label, set_label]
+                    labels = [se_label, pe_label, contrast_label]
                     seq.add_block(gx[spiral_idx], gy[spiral_idx], adc, *labels)
 
                     if echo < n_echoes - 1:
@@ -408,7 +407,7 @@ def main(
     if (output_path / Path(filename + '_header.h5')).exists():
         (output_path / Path(filename + '_header.h5')).unlink()
 
-    seq, min_te = t2_tse_spiral_kernel(
+    seq, min_te = t2_t1rho_tse_spiral_kernel(
         system=system,
         spin_lock_times=spin_lock_times,
         te=te,

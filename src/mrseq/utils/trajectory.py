@@ -268,12 +268,15 @@ def spiral_acquisition(
     if spiral_type == 'in-out':
         adc.delay = max_pre_duration
 
+        min_gy_pre_duration = max([g.shape_dur for g in gy_pre])
+        min_gx_pre_duration = max([g.shape_dur for g in gx_pre])
+        if (min_pre_duration := max(min_gy_pre_duration, min_gx_pre_duration)) > max_pre_duration:
+            raise ValueError(
+                f'Duration of prewinder gradients is too short. Should be at least {min_pre_duration * 1000:.3f} ms.'
+            )
+
         for i in range(len(gx_pre)):
-            if gy_pre[i].shape_dur > max_pre_duration:
-                raise ValueError('Duration of gx prewinder is too short.')
             gy_pre[i].delay = max_pre_duration - gy_pre[i].shape_dur
-            if gx_pre[i].shape_dur > max_pre_duration:
-                raise ValueError('Duration of gx prewinder is too short.')
             gx_pre[i].delay = max_pre_duration - gx_pre[i].shape_dur
     else:
         max_pre_duration = 0.0

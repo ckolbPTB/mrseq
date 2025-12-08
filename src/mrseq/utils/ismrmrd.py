@@ -169,8 +169,8 @@ def insert_traj_from_meta(
     -------
     list of acquisitions with the trajectory information from the meta file.
     """
-    if not len(data_acqs) == len(meta_acqs):
-        raise ValueError('Number of acquisitions in data and meta file do not match.')
+    if not (data_len := len(data_acqs)) == (meta_len := len(meta_acqs)):
+        raise ValueError(f'Number of acquisitions in data ({data_len}) and meta ({meta_len}) file do not match.')
 
     for i, (acq_d, acq_m) in enumerate(zip(data_acqs, meta_acqs, strict=False)):
         if not acq_d.number_of_samples == acq_m.number_of_samples:
