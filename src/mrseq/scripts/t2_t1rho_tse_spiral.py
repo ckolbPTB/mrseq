@@ -118,7 +118,7 @@ def t2_t1rho_tse_spiral_kernel(
         duration=rf_ex_duration,
         slice_thickness=fov_z,
         apodization=0.5,
-        phase_offset=np.pi / 2,
+        phase_offset=0,
         time_bw_product=rf_ex_bwt,
         delay=system.rf_dead_time,  # delay should equal at least the dead time of the RF pulse
         system=system,
@@ -132,7 +132,7 @@ def t2_t1rho_tse_spiral_kernel(
         duration=rf_ref_duration,
         slice_thickness=fov_z * rf_ref_width_scale_factor,
         apodization=0.5,
-        phase_offset=0.0,
+        phase_offset=np.pi / 2,
         time_bw_product=rf_ref_bwt,
         delay=system.rf_dead_time,  # delay should equal at least the dead time of the RF pulse
         system=system,
