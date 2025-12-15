@@ -3,6 +3,7 @@
 import warnings
 from typing import Literal
 
+import ismrmrd
 import matplotlib.pyplot as plt
 import numpy as np
 import pypulseq as pp
@@ -309,33 +310,16 @@ def spiral_acquisition(
 
 
 class EpiReadout:
-    """EPI readout module.
+    """EPI readout module supporting flyback and symmetric readout, ramp sampling, oversampling, and partial Fourier.
 
     Attributes
     ----------
     system
         System limits.
-    fov
-        Field of view in meters (square).
-    n_readout
-        Number of readout points.
-    n_phase_encoding
-        Number of phase encoding points.
-    bandwidth
-        Total receiver bandwidth in Hz (approx. 1/dwell_time_nyquist).
-        readout_duration will be approx matrix_size[0] / bandwidth.
-    oversampling
-        ADC oversampling factor.
     ramp_sampling
         If True, ADC is active during gradient ramps (optimized timing).
     readout_type
         Readout type ('flyback' or 'symmetric').
-    partial_fourier_factor
-        Partial Fourier factor (0.5 to 1.0).
-    adc_freq_offset
-        Frequency offset for the ADC.
-    pe_enable
-        Enable phase encoding (useful for calibration if False).
     spoiling_enable
         Enable spoiling gradients (useful for calibration if False).
     adc
@@ -390,8 +374,7 @@ class EpiReadout:
         n_phase_encoding
             Number of phase encoding points.
         bandwidth
-            Total receiver bandwidth in Hz (approx. 1/dwell_time_nyquist).
-            readout_duration will be approx matrix_size[0] / bandwidth.
+            Total receiver bandwidth in Hz.
         oversampling
             ADC oversampling factor.
         ramp_sampling
@@ -399,13 +382,13 @@ class EpiReadout:
         readout_type
             Readout type ('flyback' or 'symmetric').
         partial_fourier_factor
-            Partial Fourier factor (0.5 to 1.0].
+            Partial Fourier factor (0.5 to 1.0).
         adc_freq_offset
             Frequency offset for the ADC.
         pe_enable
-            Enable phase encoding (useful for calibration if False).
+            Enable phase encoding (useful for calibration scans if False).
         spoiling_enable
-            Enable spoiling gradients (useful for calibration if False).
+            Enable spoiling gradients.
         """
         if not 0.5 < partial_fourier_factor <= 1.0:
             raise ValueError('Desired partial Fourier factor must be larger than 0.5 and smaller or equal to 1.0.')
@@ -428,8 +411,9 @@ class EpiReadout:
         self.spoiling_enable = spoiling_enable
 
         # Derived parameters
-        self.readout_time = self.n_readout / self.bandwidth
-        self.delta_k = 1 / self.fov
+        readout_time = n_readout / bandwidth
+        delta_kx = 1 / (fov * oversampling)
+        delta_ky = 1 / fov
 
         # Initiate all optional gradients as None
         self.gx_flyback = None
@@ -439,22 +423,22 @@ class EpiReadout:
         self.gz_spoil = None
 
         # Create blip gradient with shortest possible timing
-        gy_blip_duration = np.ceil(2 * np.sqrt(self.delta_k / system.max_slew) / 10e-6 / 2) * 10e-6 * 2
+        gy_blip_duration = np.ceil(2 * np.sqrt(delta_ky / system.max_slew) / 10e-6 / 2) * 10e-6 * 2
         gy_blip_half_dur = gy_blip_duration / 2
-        self.gy_blip = pp.make_trapezoid(channel='y', system=self.system, area=-self.delta_k, duration=gy_blip_duration)
+        self.gy_blip = pp.make_trapezoid(channel='y', system=self.system, area=-delta_ky, duration=gy_blip_duration)
 
         # Create readout gradient
-        gx_encoding_area = self.n_readout * self.delta_k
+        gx_encoding_area = n_readout * delta_kx * oversampling
         if self.ramp_sampling:
             # Calculate additional gradient area from gy_blip assuming maximum slew rate
-            gy_blip_area = np.power(gy_blip_half_dur, 2) * self.system.max_slew
+            extra_area = np.power(gy_blip_half_dur, 2) * self.system.max_slew
 
             # Create gradient with additional area
             gx = pp.make_trapezoid(
                 channel='x',
                 system=self.system,
-                area=gx_encoding_area + gy_blip_area,
-                duration=gy_blip_half_dur + self.readout_time + gy_blip_half_dur,
+                area=gx_encoding_area + extra_area,
+                duration=gy_blip_half_dur + readout_time + gy_blip_half_dur,
             )
 
             if not gx.fall_time == gx.rise_time:
@@ -462,7 +446,7 @@ class EpiReadout:
 
             # Second, correct area taking actual slew rate into account
             gx_slew = gx.amplitude / gx.rise_time
-            gx_area_reduced_slew = gx.area - np.power(gy_blip_half_dur, 2) * gx_slew
+            gx_area_reduced_slew = gx.area - gx_slew * np.power(gy_blip_half_dur, 2)
 
             gx.amplitude = float(gx.amplitude * gx_encoding_area / gx_area_reduced_slew)
             gx.area = float(gx.amplitude * (gx.rise_time / 2 + gx.flat_time + gx.fall_time / 2))
@@ -473,52 +457,62 @@ class EpiReadout:
                 channel='x',
                 system=self.system,
                 flat_area=gx_encoding_area,
-                flat_time=self.readout_time,
+                flat_time=readout_time,
             )
 
         # Create ADC event
-        adc_dwell = self.delta_k / self.gx.amplitude / self.oversampling
-        adc_dwell = round_to_raster(adc_dwell, self.system.adc_raster_time, 'ceil')
-        adc_samples = int(np.ceil(self.readout_time / adc_dwell / 4) * 4)
+        adc_dwell = delta_kx / self.gx.amplitude
+        adc_dwell = round_to_raster(adc_dwell, self.system.adc_raster_time)
 
-        adc_time_to_center = adc_dwell * ((adc_samples - 1) / 2 + 0.5)
-        adc_delay = self.gx.rise_time + self.gx.flat_time / 2 - adc_time_to_center
-        adc_delay = round_to_raster(adc_delay, self.system.adc_raster_time)
+        adc_samples = int(round(readout_time / adc_dwell / 4) * 4)
+
+        adc_time_to_center = adc_dwell * (adc_samples / 2 + 0.5)
+        adc_delay = self.gx.rise_time + self.gx.flat_time / 2 - adc_time_to_center + adc_dwell / 2
+        # the adc delay has to be rounded to the rf raster time (not the adc raster time)
+        adc_delay = round_to_raster(adc_delay, self.system.adc_raster_time)  # TODO: CHANGE BACK TO RF_RASTER_TIME
 
         self.adc = pp.make_adc(
             num_samples=adc_samples,
             dwell=adc_dwell,
-            freq_offset=self.adc_freq_offset,
+            freq_offset=adc_freq_offset,
             delay=adc_delay,
             system=self.system,
         )
 
         # Create and align pre-phaser gradients considering partial fourier factor
-        # determine the number of pe lines after (and including) k-space center, which is independent of partial fourier
+        # determine the number of "PE" lines after (and including) k-space center (independent of partial fourier)
         self.n_phase_enc_post_center = int(np.ceil(self.n_phase_encoding / 2 + 1))
         # find the closest number of lines to the desired partial fourier factor
-        valid_n_phase_total = int(np.ceil(self.partial_fourier_factor * self.n_phase_encoding))
+        valid_n_phase_total = int(np.ceil(partial_fourier_factor * self.n_phase_encoding))
         # ensure that at least one line before the center is acquired
         self.n_phase_enc_pre_center = max(1, valid_n_phase_total - self.n_phase_enc_post_center)
+        # update the total number of "PE" lines
         self.n_phase_enc_total = self.n_phase_enc_pre_center + self.n_phase_enc_post_center
         # recalculate the actual partial fourier factor
         actual_pf_factor = self.n_phase_enc_total / self.n_phase_encoding
-        if actual_pf_factor != self.partial_fourier_factor:
+        if actual_pf_factor != partial_fourier_factor:
             warnings.warn(
-                f'Desired partial Fourier factor {self.partial_fourier_factor} adjusted to {actual_pf_factor}.',
+                f'Desired partial Fourier factor {partial_fourier_factor} adjusted to {actual_pf_factor}.',
                 UserWarning,
                 stacklevel=2,
             )
             self.partial_fourier_factor = actual_pf_factor
 
-        self.gx_pre = pp.make_trapezoid(channel='x', system=self.system, area=-self.gx.area / 2 - self.delta_k / 2)
+        # Create pre-phaser gradients
+        self.gx_pre = pp.make_trapezoid(
+            channel='x',
+            system=self.system,
+            area=-self.gx.area / 2 - delta_kx / 2,
+        )
         self.gy_pre = pp.make_trapezoid(
-            channel='y', system=self.system, area=self.n_phase_enc_pre_center * self.delta_k
+            channel='y',
+            system=self.system,
+            area=self.n_phase_enc_pre_center * delta_ky,
         )
         self.gx_pre, self.gy_pre = pp.align(right=[self.gx_pre, self.gy_pre])
 
+        # Create and align "phase encoding" gradients
         if self.readout_type == 'flyback':
-            # Create flyback gradient in case of flyback readout
             self.gx_flyback = pp.make_trapezoid(channel='x', system=self.system, area=-self.gx.area)
         elif self.readout_type == 'symmetric':
             # Split and align blip gradient in case of symmetric readout
@@ -540,18 +534,75 @@ class EpiReadout:
                 self.gy_blipup.waveform *= 0
                 self.gy_blipdown.waveform *= 0
                 self.gy_blipdownup.waveform *= 0
+            elif self.readout_type == 'flyback':
+                self.gy_blip.waveform *= 0
 
         # Create spoiler gradient if spoiling is enabled
         if self.spoiling_enable:
-            self.gz_spoil = pp.make_trapezoid(channel='z', system=self.system, area=4 * self.delta_k * n_readout)
+            self.gz_spoil = pp.make_trapezoid(channel='z', system=self.system, area=4 * delta_ky * n_readout)
 
-    def add_to_seq(self, seq: pp.Sequence):
+    @property
+    def time_to_center(self) -> float:
+        """Return time from beginning of readout to center of k-space (needed for TE calculations)."""
+        # i) add time for pre phaser
+        time_to_center = pp.calc_duration(self.gx_pre, self.gy_pre)
+        # ii) add time for completed k-space lines before central (ky = 0) line
+        if self.readout_type == 'flyback':
+            time_to_center += self.n_phase_enc_pre_center * (
+                pp.calc_duration(self.gx) + pp.calc_duration(self.gx_flyback, self.gy_blip)
+            )
+        elif self.readout_type == 'symmetric':
+            time_to_center += self.n_phase_enc_pre_center * pp.calc_duration(self.gx)
+        # iii) add time before start of ADC of central k-space line
+        if self.ramp_sampling:
+            time_to_center += self.adc.delay
+        else:
+            time_to_center += self.gx.rise_time
+        # iv) add time from start of ADC (for ky = 0) to timepoint when kx = 0 as well
+        time_to_center += self.adc.dwell * (self.adc.num_samples / 2 + 0.5)
+
+        return float(time_to_center)
+
+    @property
+    def time_to_center_without_prephaser(self) -> float:
+        """Return time from after pre-phasers to center of k-space (needed for TE calculations)."""
+        return self.time_to_center - pp.calc_duration(self.gx_pre, self.gy_pre)
+
+    @property
+    def total_duration(self) -> float:
+        """Return total duration of readout including pre-phaser and optional spoiler."""
+        total_duration = pp.calc_duration(self.gx_pre, self.gy_pre)
+        if self.readout_type == 'flyback':
+            total_duration += self.n_phase_enc_total * (
+                pp.calc_duration(self.gx) + pp.calc_duration(self.gx_flyback, self.gy_blip)
+            )
+            total_duration -= pp.calc_duration(self.gx_flyback, self.gy_blip)
+        elif self.readout_type == 'symmetric':
+            total_duration += self.n_phase_enc_total * pp.calc_duration(self.gx)
+        # add time for spoiler if enabled
+        if self.spoiling_enable:
+            total_duration += pp.calc_duration(self.gz_spoil)
+
+        return float(total_duration)
+
+    @property
+    def total_duration_without_prephaser(self) -> float:
+        """Return total duration of readout excluding pre-phasers but including optional spoiler."""
+        return self.total_duration - pp.calc_duration(self.gx_pre, self.gy_pre)
+
+    def add_to_seq(
+        self,
+        seq: pp.Sequence,
+        add_prephaser: bool = True,
+        mrd_dataset: ismrmrd.Dataset | None = None,
+    ) -> tuple[pp.Sequence, ismrmrd.Dataset | None]:
         """Add EPI readout blocks to the sequence."""
         # (Re)set phase encoding (LIN) label
         lin_label = pp.make_label(label='LIN', type='SET', value=0)
 
-        # Add pre-phaser gradients
-        seq.add_block(self.gx_pre, self.gy_pre)
+        # Add pre-phaser gradients if enabled
+        if add_prephaser:
+            seq.add_block(self.gx_pre, self.gy_pre)
 
         for pe_idx in range(self.n_phase_enc_total):
             rev_label = pp.make_label(type='SET', label='REV', value=self.gx.amplitude < 0)
@@ -567,6 +618,7 @@ class EpiReadout:
                 # Add readout block and reverse polarity of readout gradient
                 seq.add_block(self.gx, gy_blip, self.adc, lin_label, rev_label)
                 self.gx.amplitude = -self.gx.amplitude
+
             elif self.readout_type == 'flyback':
                 seq.add_block(self.gx, self.adc, lin_label, rev_label)
                 if pe_idx != self.n_phase_enc_total - 1:
@@ -577,13 +629,17 @@ class EpiReadout:
         if self.spoiling_enable:
             seq.add_block(self.gz_spoil)
 
-        return seq
+        return seq, mrd_dataset
 
     def plot_sequence(self):
         """Plot the sequence."""
         seq = pp.Sequence(self.system)
-        seq = self.add_to_seq(seq)
-        seq.plot(grad_disp='mT/m')
+        seq, _ = self.add_to_seq(seq)
+        _, axs1, _, axs2 = seq.plot(grad_disp='mT/m', plot_now=False)
+        # add vertical line at time to center to all plots in both figures
+        for ax in axs1 + axs2:
+            ax.axvline(x=self.time_to_center, color='r', linestyle='--')
+        plt.show()
 
     def plot_trajectory(self):
         """Plot k-space trajectory."""
@@ -598,7 +654,7 @@ class EpiReadout:
                 system=self.system,
             )
         )
-        seq = self.add_to_seq(seq)
+        seq, _ = self.add_to_seq(seq)
 
         # calculate k-space trajectory
         k_traj_adc, k_traj, _, _, _ = seq.calculate_kspace()
