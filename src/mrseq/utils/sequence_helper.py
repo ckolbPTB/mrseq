@@ -23,11 +23,11 @@ def round_to_raster(value: float, raster_time: float, method: Literal['floor', '
         Rounded value.
     """
     if method == 'floor':
-        return raster_time * np.floor(value / raster_time)
+        return float(raster_time * np.floor(value / raster_time))
     elif method == 'round':
-        return raster_time * np.round(value / raster_time)
+        return float(raster_time * np.round(value / raster_time))
     elif method == 'ceil':
-        return raster_time * np.ceil(value / raster_time)
+        return float(raster_time * np.ceil(value / raster_time))
     else:
         raise ValueError(f'Unknown rounding method: {method}. Expected: "floor", "round" or "ceil".')
 
