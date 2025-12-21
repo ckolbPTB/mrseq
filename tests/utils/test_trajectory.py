@@ -1,5 +1,7 @@
 """Tests for sequence helper functions."""
 
+from typing import Literal
+
 import numpy as np
 import pypulseq as pp
 import pytest
@@ -7,6 +9,7 @@ from mrseq.utils import spiral_acquisition
 from mrseq.utils.trajectory import MultiEchoAcquisition
 from mrseq.utils.trajectory import cartesian_phase_encoding
 from mrseq.utils.trajectory import undersampled_variable_density_spiral
+from scipy.signal import argrelextrema
 
 
 @pytest.mark.parametrize('n_phase_encoding', [50, 51, 100])
@@ -33,7 +36,7 @@ def test_cartesian_phase_encoding_identical_points(
 
 
 @pytest.mark.parametrize('pattern', ['linear', 'low_high', 'high_low', 'random'])
-def test_cartesian_phase_encoding_acceleration(pattern: str):
+def test_cartesian_phase_encoding_acceleration(pattern: Literal['linear', 'low_high', 'high_low', 'random']):
     """Test correct undersampling factor."""
     n_pe_full = 100
     acceleration = 4
@@ -44,7 +47,10 @@ def test_cartesian_phase_encoding_acceleration(pattern: str):
 
 @pytest.mark.parametrize('pattern', ['linear', 'low_high', 'high_low', 'random'])
 @pytest.mark.parametrize('n_phase_encoding_per_shot', [3, 8, 11, 13])
-def test_cartesian_phase_encoding_integer_shots(pattern: str, n_phase_encoding_per_shot: int):
+def test_cartesian_phase_encoding_integer_shots(
+    pattern: Literal['linear', 'low_high', 'high_low', 'random'],
+    n_phase_encoding_per_shot: int,
+):
     """Test that the total number of phase encoding points lead to an integer number."""
     n_pe_full = 100
     acceleration = 4
@@ -137,8 +143,8 @@ def test_spiral_acquisition(
     fov: float,
     undersampling_factor: float,
     n_spirals: int,
-    readout_oversampling: int,
-    spiral_type: str,
+    readout_oversampling: Literal[1, 2, 4],
+    spiral_type: Literal['out', 'in-out'],
 ):
     """Test spiral trajectories for different parameter combinations."""
     g_pre_duration = 2e-3  # make this duration long to work for all combinations
@@ -234,8 +240,6 @@ def test_multi_gradient_echo_timing(
     )
     seq, time_to_echoes = mecho.add_to_seq(seq, n_echoes, polarity)
 
-    from scipy.signal import argrelextrema
-
     # Get full waveform for readout gradient
     w = seq.waveforms_and_times()
     gx_waveform = w[0][0][1]
@@ -249,7 +253,7 @@ def test_multi_gradient_echo_timing(
     k0_idx = argrelextrema(np.abs(m0_intp), np.less, order=100)[0]
 
     # Remove k0-crossings at the beginning and end of the block
-    k0_idx = [ki for ki in k0_idx if (ki > 100 and ki < len(dt) - 100)]
+    k0_idx = np.asarray([ki for ki in k0_idx if (ki > 100 and ki < len(dt) - 100)])
 
     # Zero-crossing of the readout gradient should be within +/- .5 adc dwell time of the k-space center sample which is
     # the (_n_readout_pre_echo + 1)th sample. This should also be the same as the time_to_echo - time

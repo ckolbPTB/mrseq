@@ -44,7 +44,7 @@ def grpe_flash_dixon_kernel(
     rf_spoiling_phase_increment: float,
     gx_spoil_duration: float,
     gx_spoil_area: float,
-    mrd_header_file: str | None,
+    mrd_header_file: str | Path | None,
 ) -> tuple[pp.Sequence, float, float]:
     """Generate a 3D FLASH sequence with golden radial phase encoding.
 
@@ -132,7 +132,7 @@ def grpe_flash_dixon_kernel(
     seq = pp.Sequence(system=system)
 
     # create slab selective excitation pulse and gradients
-    rf, gz, gzr = pp.make_sinc_pulse(  # type: ignore
+    rf, gz, gzr = pp.make_sinc_pulse(
         flip_angle=rf_flip_angle / 180 * np.pi,
         duration=rf_duration,
         slice_thickness=fov_z,
@@ -197,9 +197,12 @@ def grpe_flash_dixon_kernel(
     ).item()
 
     # calculate echo time delay (te_delay)
-    te_delay = 0 if te is None else round_to_raster(te - min_te, system.block_duration_raster)
-    if not te_delay >= 0:
-        raise ValueError(f'TE must be larger than {min_te * 1000:.3f} ms. Current value is {te * 1000:.3f} ms.')
+    if te is None:
+        te_delay = 0.0
+    else:
+        te_delay = round_to_raster(te - min_te, system.block_duration_raster)
+        if te_delay < 0:
+            raise ValueError(f'TE must be larger than {min_te * 1000:.3f} ms. Current value is {te * 1000:.3f} ms.')
 
     # calculate minimum repetition time
     min_tr = (
@@ -212,17 +215,21 @@ def grpe_flash_dixon_kernel(
 
     # calculate repetition time delay (tr_delay)
     current_min_tr = min_tr + te_delay
-    tr_delay = 0 if tr is None else round_to_raster(tr - current_min_tr, system.block_duration_raster)
-
-    if not tr_delay >= 0:
-        raise ValueError(f'TR must be larger than {current_min_tr * 1000:.3f} ms. Current value is {tr * 1000:.3f} ms.')
+    if tr is None:
+        tr_delay = 0.0
+    else:
+        tr_delay = round_to_raster(tr - current_min_tr, system.block_duration_raster)
+        if not tr_delay >= 0:
+            raise ValueError(
+                f'TR must be larger than {current_min_tr * 1000:.3f} ms. Current value is {tr * 1000:.3f} ms.'
+            )
 
     print(f'\nCurrent echo time = {(min_te + te_delay) * 1000:.3f} ms')
     print(f'Current repetition time = {(current_min_tr + tr_delay) * 1000:.3f} ms')
 
     # choose initial rf phase offset
-    rf_phase = 0
-    rf_inc = 0
+    rf_phase = 0.0
+    rf_inc = 0.0
 
     # create header
     if mrd_header_file:
@@ -230,7 +237,7 @@ def grpe_flash_dixon_kernel(
             traj_type='other',
             encoding_fov=Fov(x=fov_x * readout_oversampling, y=fov_y, z=fov_y),
             recon_fov=Fov(x=fov_x, y=fov_y, z=fov_y),
-            encoding_matrix=MatrixSize(n_x=n_readout * readout_oversampling, n_y=n_rpe_points, n_z=n_rpe_points),
+            encoding_matrix=MatrixSize(n_x=int(n_readout * readout_oversampling), n_y=n_rpe_points, n_z=n_rpe_points),
             recon_matrix=MatrixSize(n_x=n_readout, n_y=n_rpe_points, n_z=n_rpe_points),
             dwell_time=multi_echo_gradient._adc.dwell,
             slice_limits=Limits(min=0, max=0, center=0),
@@ -378,7 +385,7 @@ def grpe_flash_dixon_kernel(
                 seq.add_block(pp.make_delay(te_delay))
 
             # add readout gradients and ADCs
-            seq, _ = multi_echo_gradient.add_to_seq_without_pre_post_gradient(seq, n_echoes, polarity)
+            seq, _ = multi_echo_gradient.add_to_seq_without_pre_post_gradient(seq, n_echoes, polarity)  # type: ignore[arg-type]
 
             # add spoiler gradients
             seq.add_block(gx_spoil)

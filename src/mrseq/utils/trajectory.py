@@ -1,5 +1,6 @@
 """Basic functionality for trajectory calculation."""
 
+from typing import Any
 from typing import Literal
 
 import numpy as np
@@ -53,10 +54,10 @@ def cartesian_phase_encoding(
     if n_phase_encoding_per_shot and sampling_order != 'random':
         kpe_extended = np.arange(-n_phase_encoding, n_phase_encoding)
         kpe_extended = kpe_extended[np.argsort(np.abs(kpe_extended), kind='stable')]
-        idx = 0
+        kidx = 0
         while np.mod(len(kpe), n_phase_encoding_per_shot) > 0:
-            kpe = np.unique(np.concatenate((kpe, (kpe_extended[idx],))))
-            idx += 1
+            kpe = np.unique(np.concatenate((kpe, (kpe_extended[kidx],))))
+            kidx += 1
 
     # Different temporal orders of phase encoding points
     if sampling_order == 'random':
@@ -194,13 +195,14 @@ class MultiEchoAcquisition:
         )
 
         min_delta_te = pp.calc_duration(self._gx) + pp.calc_duration(self._gx_between)
-        self._te_delay = (
-            0 if delta_te is None else round_to_raster(delta_te - min_delta_te, system.block_duration_raster)
-        )
-        if not self._te_delay >= 0:
-            raise ValueError(
-                f'Delta TE must be larger than {min_delta_te * 1000:.2f} ms. Current value is {delta_te * 1000:.2f} ms.'
-            )
+        if delta_te is None:
+            self._te_delay = 0.0
+        else:
+            self._te_delay = round_to_raster(delta_te - min_delta_te, self._system.block_duration_raster)
+            if self._te_delay < 0:
+                raise ValueError(
+                    f'TE must be larger than {min_delta_te * 1000:.3f} ms. Current value is {delta_te * 1000:.3f} ms.'
+                )
 
     def add_to_seq(self, seq: pp.Sequence, n_echoes: int, polarity: Literal['positive', 'negative'] = 'positive'):
         """Add all gradients and adc to sequence.
@@ -277,7 +279,9 @@ class MultiEchoAcquisition:
         return seq, time_to_echoes
 
 
-def undersampled_variable_density_spiral(system: pp.Opts, n_readout: int, fov: float, undersampling_factor: float):
+def undersampled_variable_density_spiral(
+    system: pp.Opts, n_readout: int, fov: float, undersampling_factor: float
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, int, float, float]:
     """Create undersampled variable density spiral.
 
     The distribution of the k-space points of a spiral trajectory are restricted by the maximum gradient amplitude and
@@ -304,7 +308,7 @@ def undersampled_variable_density_spiral(system: pp.Opts, n_readout: int, fov: f
 
     Returns
     -------
-    tuple(np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, float)
+    tuple(np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, int, float, float)
         - k-space trajectory (traj)
         - Gradient waveform (grad)
         - Slew rate (slew)
@@ -355,8 +359,8 @@ def spiral_acquisition(
     readout_oversampling: Literal[1, 2, 4],
     n_spirals: int | None,
     max_pre_duration: float,
-    spiral_type=Literal['out', 'in-out'],
-):
+    spiral_type: Literal['out', 'in-out'],
+) -> tuple[list[Any], list[Any], Any, np.ndarray, float]:
     """Generate a spiral acquisition sequence.
 
     Parameters
@@ -425,12 +429,12 @@ def spiral_acquisition(
     print(f'Receiver bandwidth: {int(1.0 / (adc_dwell_time * n_readout_with_oversampling))} Hz/pixel')
 
     # Create gradient values and trajectory for different spirals
-    grad = [grad * np.exp(1j * delta_angle * idx) for idx in np.arange(n_spirals)]
-    traj = [traj * np.exp(1j * delta_angle * idx) for idx in np.arange(n_spirals)]
+    grad_list = [grad * np.exp(1j * delta_angle * idx) for idx in np.arange(n_spirals)]
+    traj_list = [traj * np.exp(1j * delta_angle * idx) for idx in np.arange(n_spirals)]
 
     # Create gradient objects
-    gx = [pp.make_arbitrary_grad(channel='x', waveform=g.real, delay=adc.delay, system=system) for g in grad]
-    gy = [pp.make_arbitrary_grad(channel='y', waveform=g.imag, delay=adc.delay, system=system) for g in grad]
+    gx = [pp.make_arbitrary_grad(channel='x', waveform=g.real, delay=adc.delay, system=system) for g in grad_list]
+    gy = [pp.make_arbitrary_grad(channel='y', waveform=g.imag, delay=adc.delay, system=system) for g in grad_list]
 
     # Calculate pre- and re-winder gradients
     gx_rew, gx_pre, gy_rew, gy_pre = [], [], [], []
@@ -492,14 +496,14 @@ def spiral_acquisition(
         max_pre_duration = 0.0
 
     def combine_gradients(*grad_objects, channel):
-        grad_objects = [grad for grad in grad_objects if grad]  # Remove None
-        waveform_combined = np.concatenate([grad.waveform for grad in grad_objects])
+        grad_list = [grad for grad in grad_objects if grad is not None]  # Remove None
+        waveform_combined = np.concatenate([grad.waveform for grad in grad_list])
 
         return pp.make_arbitrary_grad(
             channel=channel,
             waveform=waveform_combined,
             first=0,
-            delay=grad_objects[0].delay,
+            delay=grad_list[0].delay,
             last=0,
             system=system,
         )
@@ -514,7 +518,7 @@ def spiral_acquisition(
     ]
 
     # times -1 to match pulseq trajectory calculation
-    trajectory = -np.stack((np.asarray(traj).real, np.asarray(traj).imag), axis=-1)
+    trajectory = -np.stack((np.asarray(traj_list).real, np.asarray(traj_list).imag), axis=-1)
 
     time_to_echo = max_pre_duration + n_samples_to_echo * readout_oversampling * adc.dwell
 
