@@ -469,7 +469,7 @@ class EpiReadout:
         adc_time_to_center = adc_dwell * (adc_samples / 2 + 0.5)
         adc_delay = self.gx.rise_time + self.gx.flat_time / 2 - adc_time_to_center + adc_dwell / 2
         # the adc delay has to be rounded to the rf raster time (not the adc raster time)
-        adc_delay = round_to_raster(adc_delay, self.system.adc_raster_time)  # TODO: CHANGE BACK TO RF_RASTER_TIME
+        adc_delay = round_to_raster(adc_delay, self.system.rf_raster_time)
 
         self.adc = pp.make_adc(
             num_samples=adc_samples,
@@ -606,6 +606,7 @@ class EpiReadout:
 
         for pe_idx in range(self.n_phase_enc_total):
             rev_label = pp.make_label(type='SET', label='REV', value=self.gx.amplitude < 0)
+            seg_label = pp.make_label(type='SET', label='SEG', value=self.gx.amplitude < 0)
             if self.readout_type == 'symmetric':
                 # Select blip gradient based on phase encoding index
                 if pe_idx == 0:
@@ -616,7 +617,7 @@ class EpiReadout:
                     gy_blip = self.gy_blipdownup
 
                 # Add readout block and reverse polarity of readout gradient
-                seq.add_block(self.gx, gy_blip, self.adc, lin_label, rev_label)
+                seq.add_block(self.gx, gy_blip, self.adc, lin_label, rev_label, seg_label)
                 self.gx.amplitude = -self.gx.amplitude
 
             elif self.readout_type == 'flyback':
