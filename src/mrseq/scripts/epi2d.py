@@ -1,9 +1,11 @@
 """2D Echo Planar Imaging (EPI) sequence."""
 
+from math import floor
 from pathlib import Path
 from typing import Literal
 
 import ismrmrd
+import matplotlib.pyplot as plt
 import numpy as np
 import pypulseq as pp
 
@@ -31,11 +33,14 @@ def epi2d_kernel(
     rf_bwt: float,
     rf_apodization: float,
     readout_type: Literal['symmetric', 'flyback'],
+    echo_type: Literal['FID', 'SE'],
     oversampling: Literal[1, 2, 4],
     ramp_sampling: bool,
     partial_fourier_factor: float,
     pe_enable: bool,
     spoiling_enable: bool,
+    add_noise_acq: bool,
+    add_navigator_acq: bool,
     mrd_header_file: str | Path | None,
 ) -> tuple[pp.Sequence, float, float]:
     """Generate a 2D Echo Planar Imaging (EPI) sequence.
@@ -70,6 +75,8 @@ def epi2d_kernel(
         Apodization factor of rf excitation pulse
     readout_type
         Readout type ('symmetric' or 'flyback').
+    echo_type
+        Echo type ('FID' or 'SE').
     oversampling
         ADC oversampling factor.
     ramp_sampling
@@ -124,39 +131,131 @@ def epi2d_kernel(
         use='excitation',
     )
 
+    # create refocussing pulse and gradients if echo type is 'SE (spin echo)
+    if echo_type == 'SE':
+        rf180, gz180, _ = pp.make_sinc_pulse(
+            flip_angle=np.pi,
+            system=system,
+            duration=rf_duration * 2,
+            slice_thickness=slice_thickness,
+            apodization=0.5,
+            time_bw_product=4,
+            phase_offset=np.pi / 2,
+            use='refocusing',
+            return_gz=True,
+            delay=system.rf_dead_time,
+        )
+        _, gzr1_t, gzr1_a = pp.make_extended_trapezoid_area(
+            channel='z',
+            grad_start=0,
+            grad_end=gz180.amplitude,
+            area=1.5 * gz.area,
+            system=system,
+        )
+        _, gzr2_t, gzr2_a = pp.make_extended_trapezoid_area(
+            channel='z',
+            grad_start=gz180.amplitude,
+            grad_end=0,
+            area=-gzr.area + 1.5 * gz.area,
+            system=system,
+        )
+
+        # create combined gradient including pre/post spoiler
+        gz180n = pp.make_extended_trapezoid(
+            channel='z',
+            system=system,
+            times=np.array([*gzr1_t, *gzr2_t + gzr1_t[3] + gz180.flat_time]),
+            amplitudes=np.array([*gzr1_a, *gzr2_a]),
+        )
+
+        # update rf delay of refocussing pulse to ensure it's centered in plateau of combined gradient
+        rf180.delay = gzr1_t[-1]
+
     # calculate minimum echo time
     gzr_prephaser_dur = pp.calc_duration(gzr, epi2d.gx_pre, epi2d.gx_pre)
-    min_te = rf.shape_dur / 2  # time from center to end of RF pulse
-    min_te += max(rf.ringdown_time, gz.fall_time)  # RF ringdown time or gradient fall time
-    min_te += gzr_prephaser_dur  # for minimum TE, gzr and pre-phasers are played out simultaneously
-    min_te += epi2d.time_to_center_without_prephaser
 
-    # calculate echo time delay (te_delay)
-    if te is None:
-        te_delay = 0.0
-    else:
-        te_delay = round_to_raster(te - min_te, system.block_duration_raster)
-        if te_delay < 0:
-            raise ValueError(f'TE must be larger than {min_te * 1000:.3f} ms. Current value is {te * 1000:.3f} ms.')
+    # calculate echo time delay(s)
+    if echo_type == 'FID':
+        min_te = rf.shape_dur / 2  # time from center to end of RF pulse
+        min_te += max(rf.ringdown_time, gz.fall_time)  # RF ringdown time or gradient fall time
+        if add_navigator_acq:
+            min_te += pp.calc_duration(gzr, epi2d.gx)
+            min_te += 3 * pp.calc_duration(epi2d.gx)
+            min_te += pp.calc_duration(epi2d.gy_pre)
+        else:
+            min_te += gzr_prephaser_dur  # for minimum TE, gzr and pre-phasers are played out simultaneously
+        min_te += epi2d.time_to_center_without_prephaser
 
-    # calculate minimum repetition time depending on chosen echo time
-    min_tr = pp.calc_duration(rf, gz)
-    min_tr += gzr_prephaser_dur  # if TE is chosen minimal, gzr and pre-phasers are played out simultaneously
-    min_tr += epi2d.total_duration_without_prephaser
+        if te is None:
+            te_delay = 0.0
+        else:
+            te_delay = round_to_raster(te - min_te, system.block_duration_raster)
+            if te_delay < 0:
+                raise ValueError(f'TE must be larger than {min_te * 1000:.3f} ms. Current value is {te * 1000:.3f} ms.')
+    elif echo_type == 'SE':
+        t_mid_ref_to_center = rf180.shape_dur / 2
+        t_mid_ref_to_center += gzr2_t[-1]
+        if add_navigator_acq:
+            t_mid_ref_to_center += pp.calc_duration(epi2d.gx)
+            t_mid_ref_to_center += 3 * pp.calc_duration(epi2d.gx)
+            t_mid_ref_to_center += pp.calc_duration(epi2d.gy_pre)
+        else:
+            t_mid_ref_to_center += gzr_prephaser_dur
+        t_mid_ref_to_center += epi2d.time_to_center_without_prephaser
+
+        min_te = 2 * t_mid_ref_to_center
+
+        te_delay2 = 0.0
+        te_delay1 = t_mid_ref_to_center
+        te_delay1 -= rf.shape_dur / 2
+        te_delay1 -= max(rf.ringdown_time, gz.fall_time)
+        te_delay1 -= gzr1_t[-1]
+        te_delay1 -= rf180.shape_dur / 2
+        te_delay1 = round_to_raster(te_delay1, system.block_duration_raster)
+
+        if te is not None:
+            if te > min_te:
+                additional_te_delay_half = round_to_raster((te - min_te) / 2, system.block_duration_raster)
+                te_delay1 += additional_te_delay_half
+                te_delay2 += additional_te_delay_half
+            else:
+                raise ValueError(
+                    f'Desired TE ({te * 1000:.3f} ms) is smaller than minimum TE ({min_te * 1000:.3f} ms).'
+                )
 
     # calculate repetition time delay (tr_delay) for current TE settings
-    current_min_tr = min_tr + te_delay
+    if echo_type == 'FID':
+        min_tr = pp.calc_duration(rf, gz)
+        if add_navigator_acq:
+            min_tr += pp.calc_duration(gzr, epi2d.gx)
+            min_tr += 3 * pp.calc_duration(epi2d.gx)
+            min_tr += pp.calc_duration(epi2d.gy_pre)
+        else:
+            min_tr += gzr_prephaser_dur
+        min_tr += epi2d.total_duration_without_prephaser
+        min_tr += te_delay
+    else:
+        min_tr = pp.calc_duration(rf, gz)
+        min_tr += te_delay1
+        min_tr += pp.calc_duration(rf180, gz180n)
+        min_tr += te_delay2
+        if add_navigator_acq:
+            min_tr += pp.calc_duration(gzr, epi2d.gx)
+            min_tr += 3 * pp.calc_duration(epi2d.gx)
+            min_tr += pp.calc_duration(epi2d.gy_pre)
+        else:
+            min_tr += gzr_prephaser_dur
+        min_tr += epi2d.total_duration_without_prephaser
+
     if tr is None:
         tr_delay = 0.0
     else:
-        tr_delay = round_to_raster(tr - current_min_tr, system.block_duration_raster)
+        tr_delay = round_to_raster(tr - min_tr, system.block_duration_raster)
         if tr_delay < 0:
-            raise ValueError(
-                f'TR must be larger than {current_min_tr * 1000:.2f} ms. Current value is {tr * 1000:.3f} ms.'
-            )
+            raise ValueError(f'TR must be larger than {min_tr * 1000:.2f} ms. Current value is {tr * 1000:.3f} ms.')
 
-    print(f'\nCurrent echo time = {(min_te + te_delay) * 1000:.3f} ms')
-    print(f'Current repetition time = {(current_min_tr + tr_delay) * 1000:.3f} ms')
+    # print(f'\nCurrent echo time = {(min_te + te_delay) * 1000:.3f} ms')
+    # print(f'Current repetition time = {(min_tr + tr_delay) * 1000:.3f} ms')
 
     # create header
     if mrd_header_file:
@@ -176,22 +275,25 @@ def epi2d_kernel(
         prot = ismrmrd.Dataset(mrd_header_file, 'w')
         prot.write_xml_header(hdr.toXML('utf-8'))
 
-    # obtain noise samples
-    seq.add_block(
-        pp.make_label(label='LIN', type='SET', value=0),
-        pp.make_label(label='SLC', type='SET', value=0),
-        pp.make_label(label='NOISE', type='SET', value=True),
-    )
-    seq.add_block(
-        epi2d.adc, pp.make_delay(round_to_raster(pp.calc_duration(epi2d.adc), system.block_duration_raster, 'ceil'))
-    )
-    seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))
-    seq.add_block(pp.make_delay(system.rf_dead_time))
+    # obtain noise samples if selected
+    if add_noise_acq:
+        seq.add_block(
+            pp.make_label(label='LIN', type='SET', value=0),
+            pp.make_label(label='SLC', type='SET', value=0),
+            pp.make_label(label='NOISE', type='SET', value=True),
+        )
+        seq.add_block(
+            epi2d.adc, pp.make_delay(round_to_raster(pp.calc_duration(epi2d.adc), system.block_duration_raster, 'ceil'))
+        )
+        seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))
+        seq.add_block(pp.make_delay(system.rf_dead_time))
 
-    if mrd_header_file:
-        acq = ismrmrd.Acquisition()
-        acq.resize(trajectory_dimensions=2, number_of_samples=epi2d.adc.num_samples)
-        prot.append_acquisition(acq)
+        if mrd_header_file:
+            acq = ismrmrd.Acquisition()
+            acq.resize(trajectory_dimensions=2, number_of_samples=epi2d.adc.num_samples)
+            prot.append_acquisition(acq)
+
+    t_after_noise = sum(seq.block_durations.values())
 
     for slice_ in range(n_slices):
         # define label(s)
@@ -203,14 +305,60 @@ def epi2d_kernel(
         # add slice selective excitation pulse and set slice label
         seq.add_block(rf, gz, slice_label)
 
-        # add echo time delay
-        if te_delay > 0:
+        if echo_type == 'FID' and te_delay > 0:
             seq.add_block(pp.make_delay(te_delay))
+        elif echo_type == 'SE':
+            seq.add_block(pp.make_delay(te_delay1))
+            t_after_te_delay1 = sum(seq.block_durations.values())
+            seq.add_block(rf180, gz180n)
+            if te_delay2 > 0:
+                seq.add_block(pp.make_delay(te_delay2))
 
-        # add slice selection rephaser and readout prephaser gradients
-        gzr, gx_pre, gy_pre = pp.align(left=[gzr], right=[epi2d.gx_pre, epi2d.gy_pre])
-        seq.add_block(gzr, gx_pre, gy_pre)
+        # add navigator scans for ghost correction
+        if add_navigator_acq:
+            # reverse the readout gradient in advance for navigator
+            gx_pre = pp.scale_grad(epi2d.gx_pre, -1)
+            gx = pp.scale_grad(epi2d.gx, -1)
+            block_content = [
+                gx_pre,
+                pp.make_label(label='NAV', type='SET', value=1),
+                pp.make_label(label='LIN', type='SET', value=floor(n_phase_encoding / 2)),
+            ]
+            if echo_type == 'FID':
+                block_content.append(gzr)  # gzr already included in gz180n for SE
+            seq.add_block(*block_content)
 
+            # reverse gx_pre back after addBlock
+            gx_pre = pp.scale_grad(gx_pre, -1)
+            for n in range(3):
+                seq.add_block(
+                    gx,
+                    epi2d.adc,
+                    pp.make_label(label='REV', type='SET', value=gx.amplitude < 0),
+                    pp.make_label(label='SEG', type='SET', value=gx.amplitude < 0),
+                    pp.make_label(label='AVG', type='SET', value=(n + 1) == 3),
+                )
+                gx = pp.scale_grad(gx, -1)
+                if mrd_header_file:
+                    acq = ismrmrd.Acquisition()
+                    acq.resize(trajectory_dimensions=2, number_of_samples=epi2d.adc.num_samples)
+                    prot.append_acquisition(acq)
+
+            # add gy_pre and reset labels
+            seq.add_block(
+                epi2d.gy_pre,
+                pp.make_label(label='NAV', type='SET', value=0),
+                pp.make_label(label='AVG', type='SET', value=0),
+            )
+        else:
+            if echo_type == 'FID':
+                gzr, gx_pre, gy_pre = pp.align(left=[gzr], right=[epi2d.gx_pre, epi2d.gy_pre])
+                seq.add_block(gzr, gx_pre, gy_pre)
+            else:
+                gx_pre, gy_pre = pp.align(right=[epi2d.gx_pre, epi2d.gy_pre])
+                seq.add_block(gx_pre, gy_pre)
+
+        t_before_readout = sum(seq.block_durations.values())
         # add EPI readout block without pre-phaser gradients
         seq, prot = epi2d.add_to_seq(seq, add_prephaser=False, mrd_dataset=prot)
 
@@ -273,23 +421,33 @@ def epi2d_kernel(
     seq.set_definition('TR', tr or min_tr)
     seq.set_definition('ReadoutOversamplingFactor', oversampling)
 
-    return seq, min_te, min_tr
+    t_exc = t_after_noise + rf.delay + rf.shape_dur / 2
+    if echo_type == 'SE':
+        t_ref = t_after_te_delay1 + rf180.delay + rf180.shape_dur / 2
+    else:
+        t_ref = 0.0
+    t_echo = t_before_readout + epi2d.time_to_center_without_prephaser
+
+    return seq, min_te, min_tr, t_exc, t_ref, t_echo
 
 
 def main(
     system: pp.Opts | None = None,
     te: float | None = None,
     tr: float | None = None,
-    fov: float = 256e-3,
-    n_readout: int = 64,
-    n_phase_encoding: int = 64,
+    fov: float = 200e-3,
+    n_readout: int = 16,
+    n_phase_encoding: int = 16,
     n_slices: int = 1,
-    slice_thickness: float = 8e-3,
+    slice_thickness: float = 4e-3,
     bandwidth: float = 64e3,
-    readout_type: Literal['symmetric', 'flyback'] = 'flyback',
-    oversampling: Literal[1, 2, 4] = 1,
+    readout_type: Literal['symmetric', 'flyback'] = 'symmetric',
+    echo_type: Literal['FID', 'SE'] = 'FID',
+    oversampling: Literal[1, 2, 4] = 2,
     ramp_sampling: bool = False,
     partial_fourier_factor: float = 1,
+    add_navigator_acq: bool = True,
+    add_noise_acq: bool = True,
     show_plots: bool = True,
     test_report: bool = True,
     timing_check: bool = True,
@@ -307,9 +465,9 @@ def main(
         system = sys_defaults
 
     # define settings of rf excitation pulse
-    rf_flip_angle: float = 90  # flip angle of the rf excitation pulse [°]
-    rf_duration = 2.56e-3  # duration of the rf excitation pulse [s]
-    rf_bwt = 4  # bandwidth-time product of rf excitation pulse [Hz*s]
+    rf_flip_angle = 90.0  # flip angle of the rf excitation pulse [°]
+    rf_duration = 1.28e-3  # duration of the rf excitation pulse [s]
+    rf_bwt = 4.0  # bandwidth-time product of rf excitation pulse [Hz*s]
     rf_apodization = 0.5  # apodization factor of rf excitation pulse
 
     # define EPI settings
@@ -318,10 +476,10 @@ def main(
 
     # define sequence filename
     rs_string = 'rs' if ramp_sampling else 'nors'
-    pf_string = f'{partial_fourier_factor}'.replace('.', 'p')
+    pf_string = f'{partial_fourier_factor}pf'.replace('.', 'p')
 
     filename = f'{Path(__file__).stem}_{int(fov * 1000)}fov_{n_readout}nx_{n_phase_encoding}ny'
-    filename += f'_{readout_type}_{oversampling}ro_{rs_string}_{pf_string}'
+    filename += f'_{readout_type}_{echo_type}_{oversampling}ro_{rs_string}_{pf_string}_with_nav'
 
     output_path = Path.cwd() / 'output'
     output_path.mkdir(parents=True, exist_ok=True)
@@ -332,7 +490,7 @@ def main(
 
     mrd_file = output_path / Path(filename + '_header.h5')
 
-    seq, _min_te, min_tr = epi2d_kernel(
+    seq, _min_te, min_tr, t_exc, t_ref, t_echo = epi2d_kernel(
         system=system,
         te=te,
         tr=tr,
@@ -348,12 +506,19 @@ def main(
         rf_bwt=rf_bwt,
         rf_apodization=rf_apodization,
         readout_type=readout_type,
+        echo_type=echo_type,
         ramp_sampling=ramp_sampling,
         partial_fourier_factor=partial_fourier_factor,
         pe_enable=enable_phase_encoding,
         spoiling_enable=enable_gradient_spoiling,
+        add_noise_acq=add_noise_acq,
+        add_navigator_acq=add_navigator_acq,
         mrd_header_file=mrd_file,
     )
+
+    print(f'Time from exc to ref: {(t_ref - t_exc) * 1000}')
+    print(f'Time from ref to echo: {(t_echo - t_ref) * 1000}')
+    print(f'Time from exc to echo: {(t_echo - t_exc) * 1000}')
 
     # check timing of the sequence
     if timing_check and not test_report:
@@ -374,7 +539,12 @@ def main(
     seq.write(str(output_path / filename), create_signature=True)
 
     if show_plots:
-        seq.plot(time_range=(0, 10 * (tr or min_tr)))
+        fig1, axs1, fig2, axs2 = seq.plot(time_range=(0, 10 * (tr or min_tr)), plot_now=False)
+        for ax in [*axs1, *axs2]:
+            ax.axvline(t_exc, color='red')
+            ax.axvline(t_ref, color='red')
+            ax.axvline(t_echo, color='red')
+        plt.show()
 
     return seq, output_path / filename
 
