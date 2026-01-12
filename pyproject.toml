@@ -46,18 +46,21 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = [
+tests = [
     "coverage",
     "codecov",
     "pre-commit",
     "pytest",
     "pytest-cov",
     "pytest-xdist",
+]
+examples = [
     "MRzeroCore@git+https://github.com/ckolbPTB/MRzero-Core.git@extend_mrd",
     "mrpro",
     "cmap",
     "jupyter-book<2.0",
 ]
+dev = ["mrseq[tests, examples]"]
 
 [project.urls]
 "repository" = "https://github.com/PTB-MR/mrseq"

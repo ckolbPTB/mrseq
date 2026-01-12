@@ -272,6 +272,7 @@ def main(
     show_plots: bool = True,
     test_report: bool = True,
     timing_check: bool = True,
+    v141_compatibility: bool = True,
 ) -> tuple[pp.Sequence, Path]:
     """Generate a SE-based inversion recovery sequence with one inversion pulse before every readout.
 
@@ -300,6 +301,8 @@ def main(
         Toggles advanced test report.
     timing_check
         Toggles timing check of the sequence.
+    v141_compatibility
+        Save the sequence in pulseq v1.4.1 for backwards compatibility.
 
     Returns
     -------
@@ -397,7 +400,7 @@ def main(
     output_path = Path.cwd() / 'output'
     output_path.mkdir(parents=True, exist_ok=True)
     print(f"\nSaving sequence file '{filename}.seq' into folder '{output_path}'.")
-    seq.write(str(output_path / filename), create_signature=True)
+    seq.write(str(output_path / filename), create_signature=True, v141_compat=v141_compatibility)
 
     if show_plots:
         seq.plot(time_range=(0, time_to_first_tr_block))

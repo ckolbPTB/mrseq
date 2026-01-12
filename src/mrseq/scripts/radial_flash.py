@@ -176,7 +176,7 @@ def radial_flash_kernel(
         tr_delay = round_to_raster(tr - current_min_tr, system.block_duration_raster)
         if not tr_delay >= 0:
             raise ValueError(
-                f'TR must be larger than {current_min_tr * 1000:.2f} ms. Current value is {tr * 1000:.3f} ms.'
+                f'TR must be larger than {current_min_tr * 1000:.3f} ms. Current value is {tr * 1000:.3f} ms.'
             )
 
     print(f'\nCurrent echo time = {(min_te + te_delay) * 1000:.3f} ms')
@@ -296,6 +296,7 @@ def main(
     show_plots: bool = True,
     test_report: bool = True,
     timing_check: bool = True,
+    v141_compatibility: bool = True,
 ) -> tuple[pp.Sequence, Path]:
     """Generate a radial FLASH sequence.
 
@@ -329,6 +330,8 @@ def main(
         Toggles advanced test report.
     timing_check
         Toggles timing check of the sequence.
+    v141_compatibility
+        Save the sequence in pulseq v1.4.1 for backwards compatibility.
 
     Returns
     -------
@@ -418,7 +421,7 @@ def main(
 
     # save seq-file to disk
     print(f"\nSaving sequence file '{filename}.seq' into folder '{output_path}'.")
-    seq.write(str(output_path / filename), create_signature=True)
+    seq.write(str(output_path / filename), create_signature=True, v141_compat=v141_compatibility)
 
     if show_plots:
         seq.plot(time_range=(0, 10 * (tr or min_tr)))
