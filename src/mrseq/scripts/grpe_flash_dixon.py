@@ -45,7 +45,7 @@ def grpe_flash_dixon_kernel(
     gx_spoil_duration: float,
     gx_spoil_area: float,
     mrd_header_file: str | Path | None,
-) -> tuple[pp.Sequence, float, float]:
+) -> tuple[pp.Sequence, float, float, float]:
     """Generate a 3D FLASH sequence with golden radial phase encoding.
 
     Parameters
@@ -112,6 +112,8 @@ def grpe_flash_dixon_kernel(
         Shortest possible echo time.
     min_tr
         Shortest possible repetition time.
+    delta_te
+        Time between echoes.
 
     """
     if readout_oversampling < 1:
@@ -327,7 +329,14 @@ def grpe_flash_dixon_kernel(
                     seq.add_block(pp.make_delay(te_delay))
 
                 # add readout gradients and ADCs
-                seq, _ = multi_echo_gradient.add_to_seq_without_pre_post_gradient(seq, n_echoes)
+                if se_index >= 0:
+                    seq, _ = multi_echo_gradient.add_to_seq_without_pre_post_gradient(seq, n_echoes)
+                else:
+                    # the most accurate way to get the duration of the readout block is to add it to a dummy sequence
+                    seq_dummy = pp.Sequence(system=system)
+                    seq_dummy, _ = multi_echo_gradient.add_to_seq_without_pre_post_gradient(seq_dummy, n_echoes)
+                    readout_duration = sum(seq_dummy.block_durations.values())
+                    seq.add_block(pp.make_delay(readout_duration))
 
                 # add re-winder and spoiler gradients
                 gy_pre.amplitude = -gy_pre.amplitude
@@ -349,7 +358,7 @@ def grpe_flash_dixon_kernel(
 
                     for echo_ in range(n_echoes):
                         gx_sign = (-1) ** echo_
-                        grpe_trajectory[:, 0] = k0_trajectory[::gx_sign]
+                        grpe_trajectory[:, 0] = k0_trajectory * gx_sign
                         grpe_trajectory[:, 1] = (pe - n_rpe_points / 2 + pe_shift) * np.cos(rotation_angle_rad)
                         grpe_trajectory[:, 2] = (pe - n_rpe_points / 2 + pe_shift) * np.sin(rotation_angle_rad)
 
@@ -358,10 +367,13 @@ def grpe_flash_dixon_kernel(
                         acq.traj[:] = grpe_trajectory
                         prot.append_acquisition(acq)
 
-    # obtain echoes with positive and negative gradient polarity to be able to correct for any misalignment
-    seq.add_block(pp.make_label(label='NAV', type='SET', value=True))
-    for _ in range(4):
-        for polarity in ['positive', 'negative']:
+    # obtain echoes with positive and negative gradient polarity to be able to correct for any differences between
+    # positive and negative gradient waveforms in the bi-polar readout
+    seq.add_block(pp.make_label(type='SET', label='NAV', value=True))
+    for average_idx in range(4):
+        average_label = pp.make_label(type='SET', label='AVG', value=average_idx)
+        for polarity_idx, polarity in enumerate(['positive', 'negative']):
+            polarity_label = pp.make_label(type='SET', label='REP', value=polarity_idx)
             # set rf pulse properties and add rf pulse block event
             if rf_spoiling_phase_increment > 0:
                 rf.phase_offset = rf_phase / 180 * np.pi
@@ -377,7 +389,9 @@ def grpe_flash_dixon_kernel(
             seq.add_block(
                 multi_echo_gradient._gx_pre
                 if polarity == 'positive'
-                else pp.scale_grad(multi_echo_gradient._gx_pre, -1)
+                else pp.scale_grad(multi_echo_gradient._gx_pre, -1),
+                average_label,
+                polarity_label,
             )
 
             # add delay due to TE
@@ -385,7 +399,7 @@ def grpe_flash_dixon_kernel(
                 seq.add_block(pp.make_delay(te_delay))
 
             # add readout gradients and ADCs
-            seq, _ = multi_echo_gradient.add_to_seq_without_pre_post_gradient(seq, n_echoes, polarity)  # type: ignore[arg-type]
+            seq, time_to_echoes = multi_echo_gradient.add_to_seq_without_pre_post_gradient(seq, n_echoes, polarity)  # type: ignore[arg-type]
 
             # add spoiler gradients
             seq.add_block(gx_spoil)
@@ -405,7 +419,7 @@ def grpe_flash_dixon_kernel(
 
                 for echo_ in range(n_echoes):
                     gx_sign = (-1) ** echo_ if polarity == 'positive' else (-1) ** (echo_ + 1)
-                    grpe_trajectory[:, 0] = k0_trajectory[::gx_sign]
+                    grpe_trajectory[:, 0] = k0_trajectory * gx_sign
 
                     acq = ismrmrd.Acquisition()
                     acq.resize(trajectory_dimensions=3, number_of_samples=multi_echo_gradient._adc.num_samples)
@@ -418,12 +432,14 @@ def grpe_flash_dixon_kernel(
     if mrd_header_file:
         prot.close()
 
-    return seq, min_te, min_tr
+    delta_te_array = np.diff(time_to_echoes)
+    return seq, float(min_te), float(min_tr), float(delta_te_array[0])
 
 
 def main(
     system: pp.Opts | None = None,
     tr: float | None = None,
+    rf_flip_angle: float = 12,
     fov_x: float = 128e-3,
     fov_y: float = 128e-3,
     fov_z: float = 128e-3,
@@ -434,6 +450,7 @@ def main(
     partial_echo_factor: float = 0.7,
     partial_fourier_factor: float = 0.7,
     receiver_bandwidth_per_pixel: float = 1200,  # Hz/pixel
+    n_dummy_spokes: int = 2,
     show_plots: bool = True,
     test_report: bool = True,
     timing_check: bool = True,
@@ -446,6 +463,8 @@ def main(
         PyPulseq system limits object.
     tr
         Desired repetition time (TR) (in seconds). Minimum repetition time is used if set to None.
+    rf_flip_angle
+        Flip angle of rf excitation pulse (in degrees)
     fov_x
         Field of view in x direction (in meters).
     fov_y
@@ -467,6 +486,8 @@ def main(
         Partial Fourier factor along RPE lines (between 0.5 and 1).
     receiver_bandwidth_per_pixel
         Desired receiver bandwidth per pixel (in Hz/pixel). This is used to calculate the readout duration.
+    n_dummy_spokes
+        Number of dummy RPE spokes before data acquisition to ensure steady state
     show_plots
         Toggles sequence plot.
     test_report
@@ -479,7 +500,6 @@ def main(
 
     # define settings of rf excitation pulse
     rf_duration = 0.6e-3  # duration of the rf excitation pulse [s]
-    rf_flip_angle = 12  # flip angle of rf excitation pulse [°]
     rf_bwt = 2  # bandwidth-time product of rf excitation pulse [Hz*s]
     rf_apodization = 0.5  # apodization factor of rf excitation pulse
     readout_oversampling = 2  # readout oversampling factor, commonly 2. This reduces aliasing artifacts.
@@ -493,10 +513,8 @@ def main(
         n_readout_with_oversampling, adc_dwell_time, system.grad_raster_time, system.adc_raster_time
     )
 
-    n_dummy_spokes = 2  # number of dummy RPE spokes before data acquisition to ensure steady state
-
-    te = None
-    delta_te = None
+    te = None  # shortest possible echo time
+    delta_te = None  # shortest possible delta echo time
     n_echoes = 3
 
     # define spoiling
@@ -515,7 +533,7 @@ def main(
     if (output_path / Path(filename + '_header.h5')).exists():
         (output_path / Path(filename + '_header.h5')).unlink()
 
-    seq, min_te, min_tr = grpe_flash_dixon_kernel(
+    seq, min_te, min_tr, delta_te = grpe_flash_dixon_kernel(
         system=system,
         te=te,
         delta_te=delta_te,
@@ -560,9 +578,9 @@ def main(
 
     # write all required parameters in the seq-file header/definitions
     seq.set_definition('FOV', [fov_x, fov_y, fov_z])
-    seq.set_definition('ReconMatrix', (n_readout, n_readout, 1))
+    seq.set_definition('ReconMatrix', (n_readout, n_rpe_points, n_rpe_points))
     seq.set_definition('SliceThickness', fov_z)
-    seq.set_definition('TE', te or min_te)
+    seq.set_definition('TE', [(te or min_te) + idx * delta_te for idx in range(n_echoes)])
     seq.set_definition('TR', tr or min_tr)
     seq.set_definition('ReadoutOversamplingFactor', readout_oversampling)
 

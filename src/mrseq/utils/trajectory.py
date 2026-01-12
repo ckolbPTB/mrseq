@@ -196,10 +196,10 @@ class MultiEchoAcquisition:
 
         min_delta_te = pp.calc_duration(self._gx) + pp.calc_duration(self._gx_between)
         if delta_te is None:
-            self._te_delay = 0.0
+            self._delta_te_delay = 0.0
         else:
-            self._te_delay = round_to_raster(delta_te - min_delta_te, self._system.block_duration_raster)
-            if self._te_delay < 0:
+            self._delta_te_delay = round_to_raster(delta_te - min_delta_te, self._system.block_duration_raster)
+            if self._delta_te_delay < 0:
                 raise ValueError(
                     f'TE must be larger than {min_delta_te * 1000:.3f} ms. Current value is {delta_te * 1000:.3f} ms.'
                 )
@@ -272,8 +272,8 @@ class MultiEchoAcquisition:
             )
             start_of_current_gx = sum(seq.block_durations.values())
             if echo_ < n_echoes - 1:
-                if self._te_delay > 0:
-                    seq.add_block(pp.make_delay(self._te_delay))
+                if self._delta_te_delay > 0:
+                    seq.add_block(pp.make_delay(self._delta_te_delay))
                 seq.add_block(pp.scale_grad(self._gx_between, -gx_sign))
 
         return seq, time_to_echoes
