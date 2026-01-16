@@ -41,7 +41,7 @@ classifiers = [
 dependencies = [
     "numpy>=1.23,<3.0",
     "matplotlib<4.0",
-    "pypulseq@git+https://github.com/ckolbPTB/pypulseq.git@fix_write_v141",
+    "pypulseq>=1.5.0",
     "ismrmrd>=1.14.1",
 ]
 
@@ -55,7 +55,7 @@ tests = [
     "pytest-xdist",
 ]
 examples = [
-    "MRzeroCore@git+https://github.com/ckolbPTB/MRzero-Core.git@extend_mrd",
+    "MRzeroCore@git+https://github.com/MRsources/MRzero-Core.git",
     "mrpro",
     "cmap",
     "jupyter-book<2.0",
@@ -68,10 +68,7 @@ dev = ["mrseq[tests, examples]"]
 # PyTest section
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-filterwarnings = [
-    "error",
-    'ignore:WARNING! The sequence in memory uses "soft delay" extension, which is incompatible with the file format v1.4.1',
-]
+filterwarnings = ["error"]
 
 [tool.ruff]
 line-length = 120
