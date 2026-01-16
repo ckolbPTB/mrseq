@@ -41,7 +41,7 @@ classifiers = [
 dependencies = [
     "numpy>=1.23,<3.0",
     "matplotlib<4.0",
-    "pypulseq@git+https://github.com/imr-framework/pypulseq",
+    "pypulseq@git+https://github.com/ckolbPTB/pypulseq.git@fix_write_v141",
     "ismrmrd>=1.14.1",
 ]
 
