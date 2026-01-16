@@ -5,10 +5,11 @@ from pathlib import Path
 import numpy as np
 import pypulseq as pp
 
-from mrseq.preparations.t1_inv_prep import add_t1_inv_prep
+from mrseq.preparations import add_t1_inv_prep
 from mrseq.utils import find_gx_flat_time_on_adc_raster
 from mrseq.utils import round_to_raster
 from mrseq.utils import sys_defaults
+from mrseq.utils import write_sequence
 from mrseq.utils.trajectory import cartesian_phase_encoding
 
 
@@ -447,7 +448,7 @@ def main(
 
     # save seq-file to disk
     print(f"\nSaving sequence file '{filename}.seq' into folder '{output_path}'.")
-    seq.write(str(output_path / filename), create_signature=True, v141_compat=v141_compatibility)
+    write_sequence(seq, str(output_path / filename), create_signature=True, v141_compatibility=v141_compatibility)
 
     if show_plots:
         seq.plot()

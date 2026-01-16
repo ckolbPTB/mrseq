@@ -9,6 +9,7 @@ import pypulseq as pp
 from mrseq.utils import find_gx_flat_time_on_adc_raster
 from mrseq.utils import round_to_raster
 from mrseq.utils import sys_defaults
+from mrseq.utils import write_sequence
 from mrseq.utils.constants import GOLDEN_ANGLE_HALF_CIRCLE
 from mrseq.utils.ismrmrd import Fov
 from mrseq.utils.ismrmrd import Limits
@@ -421,7 +422,7 @@ def main(
 
     # save seq-file to disk
     print(f"\nSaving sequence file '{filename}.seq' into folder '{output_path}'.")
-    seq.write(str(output_path / filename), create_signature=True, v141_compat=v141_compatibility)
+    write_sequence(seq, str(output_path / filename), create_signature=True, v141_compatibility=v141_compatibility)
 
     if show_plots:
         seq.plot(time_range=(0, 10 * (tr or min_tr)))
