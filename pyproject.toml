@@ -68,7 +68,10 @@ dev = ["mrseq[tests, examples]"]
 # PyTest section
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-filterwarnings = ["error"]
+filterwarnings = [
+    "error",
+    'ignore:WARNING! The sequence in memory uses "soft delay" extension, which is incompatible with the file format v1.4.1',
+]
 
 [tool.ruff]
 line-length = 120
