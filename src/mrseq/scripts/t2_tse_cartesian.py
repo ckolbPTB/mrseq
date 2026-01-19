@@ -178,7 +178,11 @@ def t2_tse_cartesian_kernel(
     print(f'\nCurrent echo time = {(te) * 1000:.3f} ms')
 
     # obtain noise samples
-    seq.add_block(pp.make_label(label='LIN', type='SET', value=0), pp.make_label(label='SLC', type='SET', value=0))
+    seq.add_block(
+        pp.make_label(label='LIN', type='SET', value=0),
+        pp.make_label(label='SLC', type='SET', value=0),
+        pp.make_label(type='SET', label='TRID', value=99),
+    )
     seq.add_block(adc, pp.make_label(label='NOISE', type='SET', value=True))
     seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))
     seq.add_block(pp.make_delay(system.rf_dead_time))
@@ -209,7 +213,7 @@ def t2_tse_cartesian_kernel(
             _start_time_tr_block = sum(seq.block_durations.values())
 
             # add excitation pulse
-            seq.add_block(rf_ex, gz_ex)
+            seq.add_block(rf_ex, gz_ex, pp.make_label(type='SET', label='TRID', value=1))
             seq.add_block(gzr_ex)
             seq.add_block(pp.make_delay(tau1))
 
