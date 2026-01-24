@@ -29,6 +29,7 @@ def t2_tse_cartesian_kernel(
     readout_oversampling: int,
     gz_crusher_duration: float,
     gz_crusher_area: float,
+    n_receiver_gain_calibration: int,
 ) -> tuple[pp.Sequence, float]:
     """Generate a Cartesian TSE sequence for T2-mapping.
 
@@ -70,8 +71,10 @@ def t2_tse_cartesian_kernel(
         Readout oversampling.
     gz_crusher_duration
         Duration of the crusher gradients applied around the 180° pulse.
-    gz_crusher_area : float
+    gz_crusher_area
         Area (zeroth gradient moment) of the crusher gradients applied around the 180° pulse.
+    n_receiver_gain_calibration
+        Number of readouts for receiver gain calibration (needed for GE scanners)
 
     Returns
     -------
@@ -177,6 +180,35 @@ def t2_tse_cartesian_kernel(
     tau3 = round_to_raster(te / 2 - min_tau3, raster_time=system.grad_raster_time)
     print(f'\nCurrent echo time = {(te) * 1000:.3f} ms')
 
+    # recceiver gain calibration (needed for GE scanners)
+    for _ in range(n_receiver_gain_calibration):
+        _start_time_tr_block = sum(seq.block_durations.values())
+        seq.add_block(rf_ex, gz_ex, pp.make_label(type='SET', label='TRID', value=33))
+        seq.add_block(gzr_ex)
+        seq.add_block(pp.make_delay(tau1))
+
+        # add refocusing pulse with crusher gradients
+        seq.add_block(gz_crush)
+        seq.add_block(rf_ref, gz_ref)
+        seq.add_block(gz_crush)
+
+        seq.add_block(pp.make_delay(tau2))
+
+        # add pre gradients
+        seq.add_block(gx_pre)
+
+        # readout gradient and adc
+        seq.add_block(gx, adc, pp.make_label(type='SET', label='NAV', value=True))
+
+        # rewind gradients
+        seq.add_block(gx_post)
+
+        duration_tr_block = sum(seq.block_durations.values()) - _start_time_tr_block
+        tr_delay = round_to_raster(tr - duration_tr_block, system.block_duration_raster)
+        if tr_delay < 0:
+            raise ValueError('Desired TR too short for given sequence parameters.')
+        seq.add_block(pp.make_delay(tr_delay))
+
     # obtain noise samples
     seq.add_block(
         pp.make_label(label='LIN', type='SET', value=0),
@@ -194,7 +226,7 @@ def t2_tse_cartesian_kernel(
         # phase encoding along se
         gz_pre = pp.make_trapezoid(
             channel='z',
-            area=gz_areas[se],
+            area=gz_areas[se] if gz_areas[se] != 0 else np.finfo(np.float32).eps,
             duration=pp.calc_duration(gx_pre),
             system=system,
         )
@@ -205,7 +237,7 @@ def t2_tse_cartesian_kernel(
             # phase encoding along pe
             gy_pre = pp.make_trapezoid(
                 channel='y',
-                area=gy_areas[pe],
+                area=gy_areas[pe] if gy_areas[pe] != 0 else np.finfo(np.float32).eps,
                 duration=pp.calc_duration(gx_pre),
                 system=system,
             )
@@ -330,6 +362,7 @@ def main(
         readout_oversampling=readout_oversampling,
         gz_crusher_duration=gz_crusher_duration,
         gz_crusher_area=gz_crusher_area,
+        n_receiver_gain_calibration=0,
     )
 
     # check timing of the sequence
