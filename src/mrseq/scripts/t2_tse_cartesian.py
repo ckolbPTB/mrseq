@@ -181,6 +181,7 @@ def t2_tse_cartesian_kernel(
     print(f'\nCurrent echo time = {(te) * 1000:.3f} ms')
 
     # recceiver gain calibration (needed for GE scanners)
+    seq.add_block(pp.make_label(type='SET', label='NAV', value=True))
     for _ in range(n_receiver_gain_calibration):
         _start_time_tr_block = sum(seq.block_durations.values())
         seq.add_block(rf_ex, gz_ex, pp.make_label(type='SET', label='TRID', value=33))
@@ -198,7 +199,7 @@ def t2_tse_cartesian_kernel(
         seq.add_block(gx_pre)
 
         # readout gradient and adc
-        seq.add_block(gx, adc, pp.make_label(type='SET', label='NAV', value=True))
+        seq.add_block(gx, adc)
 
         # rewind gradients
         seq.add_block(gx_post)
@@ -208,6 +209,7 @@ def t2_tse_cartesian_kernel(
         if tr_delay < 0:
             raise ValueError('Desired TR too short for given sequence parameters.')
         seq.add_block(pp.make_delay(tr_delay))
+    seq.add_block(pp.make_label(type='SET', label='NAV', value=False))
 
     # obtain noise samples
     seq.add_block(
