@@ -1,10 +1,14 @@
 """Utilities to deal with creating ISMRMRD files."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 import ismrmrd
+import numpy as np
+import pypulseq as pp
+from typing_extensions import Self
 
 T_traj = Literal['cartesian', 'epi', 'radial', 'spiral', 'other']
 
@@ -16,6 +20,11 @@ class Limits:
     min: int = 0
     max: int = 0
     center: int = 0
+
+    @classmethod
+    def from_label_list(cls, label_list) -> Self:
+        """Create Limits from list of labels."""
+        return cls(min=min(label_list), max=max(label_list), center=((max(label_list) - min(label_list) + 1) // 2))
 
 
 @dataclass(slots=True)
@@ -48,9 +57,14 @@ def create_header(
     encoding_matrix: MatrixSize,
     recon_matrix: MatrixSize,
     dwell_time: float,
-    k1_limits: Limits,
-    k2_limits: Limits,
-    slice_limits: Limits,
+    k1_limits: Limits | None = None,
+    k2_limits: Limits | None = None,
+    slice_limits: Limits | None = None,
+    contrast_limits: Limits | None = None,
+    average_limits: Limits | None = None,
+    repetition_limits: Limits | None = None,
+    phase_limits: Limits | None = None,
+    set_limits: Limits | None = None,
     h1_resonance_freq: float = 127729200,  # 3T
 ) -> ismrmrd.xsd.ismrmrdHeader:
     """
@@ -76,6 +90,18 @@ def create_header(
         Min, max, and center limits for k1.
     k2_limits
         Min, max, and center limits for k2.
+    slice_limits
+        Min, max, and center limits for slices.
+    contrast_limits
+        Min, max, and center limits for contrast.
+    average_limits
+        Min, max, and center limits for averages.
+    repetition_limits
+        Min, max, and center limits for repetitions.
+    phase_limits
+        Min, max, and center limits for phases.
+    set_limits
+        Min, max, and center limits for set.
     h1_resonance_freq
         Resonance frequency of water nuclei.
 
@@ -83,11 +109,28 @@ def create_header(
     -------
         created ISMRMRD header.
     """
+    if k1_limits is None:
+        k1_limits = Limits()
+    if k2_limits is None:
+        k2_limits = Limits()
+    if slice_limits is None:
+        slice_limits = Limits()
+    if contrast_limits is None:
+        contrast_limits = Limits()
+    if average_limits is None:
+        average_limits = Limits()
+    if repetition_limits is None:
+        repetition_limits = Limits()
+    if phase_limits is None:
+        phase_limits = Limits()
+    if set_limits is None:
+        set_limits = Limits()
+
     hdr = ismrmrd.xsd.ismrmrdHeader()
 
     # experimental conditions
     exp = ismrmrd.xsd.experimentalConditionsType()
-    exp.H1resonanceFrequency_Hz = h1_resonance_freq
+    exp.H1resonanceFrequency_Hz = int(h1_resonance_freq)
     hdr.experimentalConditions = exp
 
     # user parameters
@@ -120,9 +163,14 @@ def create_header(
 
     # encoding limits
     limits = ismrmrd.xsd.encodingLimitsType()
-    limits.slice = ismrmrd.xsd.limitType(slice_limits.min, slice_limits.max, slice_limits.center)
     limits.kspace_encoding_step_1 = ismrmrd.xsd.limitType(k1_limits.min, k1_limits.max, k1_limits.center)
     limits.kspace_encoding_step_2 = ismrmrd.xsd.limitType(k2_limits.min, k2_limits.max, k2_limits.center)
+    limits.slice = ismrmrd.xsd.limitType(slice_limits.min, slice_limits.max, slice_limits.center)
+    limits.contrast = ismrmrd.xsd.limitType(contrast_limits.min, contrast_limits.max, contrast_limits.center)
+    limits.average = ismrmrd.xsd.limitType(average_limits.min, average_limits.max, average_limits.center)
+    limits.repetition = ismrmrd.xsd.limitType(repetition_limits.min, repetition_limits.max, repetition_limits.center)
+    limits.phase = ismrmrd.xsd.limitType(phase_limits.min, phase_limits.max, phase_limits.center)
+    limits.set = ismrmrd.xsd.limitType(set_limits.min, set_limits.max, set_limits.center)
     encoding.encodingLimits = limits
 
     # append encoding
@@ -250,8 +298,8 @@ def combine_ismrmrd_files(data_file: Path, meta_file: Path, filename_ext: str = 
         path to the ismrmrd data file
     meta_file
         path to the ismrmrd meta file
-    filename_ext, optional
-        filename extension of the output file, by default '_with_traj.mrd'
+    filename_ext
+        filename extension of the output file
 
     Returns
     -------
@@ -271,6 +319,120 @@ def combine_ismrmrd_files(data_file: Path, meta_file: Path, filename_ext: str = 
 
     # add acquisitions with trajectory information
     for acq in new_acqs:
+        ds.append_acquisition(acq)
+
+    ds.close()
+
+    return ds
+
+
+def ismrmrd_from_sequence(adc_data_list: Sequence[np.ndarray], filename_seq: str, filename_mrd: str) -> ismrmrd.Dataset:
+    """Create ismrmrd file based on .
+
+    Parameters
+    ----------
+    adc_data_list
+        list of numpy arrays where each array is one acquisition raw data block
+    filename_seq
+        filename for sequence file
+    filename_ext
+        filename for output ISMRMRD file
+
+    Returns
+    -------
+       ISMRMRD raw data file
+    """
+    sequence = pp.Sequence()
+    sequence.read(filename_seq)
+
+    adc_labels = sequence.evaluate_labels(evolution='adc')
+    # Make labels into lists rather than numpy arrays because ismrmrd cannot deal well with numpy
+    for key in adc_labels:
+        adc_labels[key] = adc_labels[key].tolist()
+
+    if (n_labels := len(adc_labels.get('LIN', 0))) != (n_adc_data := len(adc_data_list)):
+        raise ValueError(f'Number of acquisitions ({n_adc_data}) and labels ({n_labels}) do not match.')
+
+    # Get adc dwell time
+    adc_blocks = [sequence.get_block(be).adc for be in sequence.block_events if sequence.get_block(be).adc is not None]
+
+    readout_oversampling = (
+        sequence.get_definition('ReadoutOversamplingFactor')
+        if sequence.get_definition('ReadoutOversamplingFactor')
+        else 1.0
+    )
+
+    # Create new file
+    ds = ismrmrd.Dataset(filename_mrd, create_if_needed=True)
+
+    n_readout = adc_data_list[0].shape[-1]
+    num_channels = adc_data_list[0].shape[-2]
+    n_phase_encoding = max(adc_labels.get('LIN', 0)) - min(adc_labels.get('LIN', 0)) + 1
+    n_slice_encoding = max(adc_labels.get('PAR', 0)) - min(adc_labels.get('PAR', 0)) + 1
+    hdr = create_header(
+        traj_type='cartesian',
+        encoding_fov=Fov(*sequence.get_definition('FOV').tolist()),
+        recon_fov=Fov(*sequence.get_definition('FOV').tolist()),
+        encoding_matrix=MatrixSize(n_x=n_readout, n_y=n_phase_encoding, n_z=n_slice_encoding),
+        recon_matrix=MatrixSize(n_x=int(n_readout / readout_oversampling), n_y=n_phase_encoding, n_z=n_slice_encoding),
+        dwell_time=adc_blocks[0].dwell,
+        k1_limits=Limits.from_label_list(adc_labels.get('LIN', (0,))),
+        k2_limits=Limits.from_label_list(adc_labels.get('PAR', (0,))),
+        slice_limits=Limits.from_label_list(adc_labels.get('SLC', (0,))),
+        contrast_limits=Limits.from_label_list(adc_labels.get('ECO', (0,))),
+        average_limits=Limits.from_label_list(adc_labels.get('AVG', (0,))),
+        repetition_limits=Limits.from_label_list(adc_labels.get('REP', (0,))),
+        phase_limits=Limits.from_label_list(adc_labels.get('PHS', (0,))),
+        set_limits=Limits.from_label_list(adc_labels.get('SET', (0,))),
+        h1_resonance_freq=sequence.system.gamma * sequence.system.B0,
+    )
+
+    def get_sequence_definition(sequence, definition_parameter: str, value_scaling: float = 1.0):
+        value = sequence.get_definition(definition_parameter)
+        if isinstance(value, np.ndarray):
+            return [val.item() for val in (value_scaling * value)]
+        if isinstance(value, np.generic):
+            return [value_scaling * float(value)]
+        if len(value) == 0:
+            return []
+        return value
+
+    # Sequence Information
+    seq = ismrmrd.xsd.sequenceParametersType()
+    seq.TR = get_sequence_definition(sequence, 'TR', 1e3)
+    seq.TE = get_sequence_definition(sequence, 'TE', 1e3)
+    seq.TI = get_sequence_definition(sequence, 'TI', 1e3)
+    hdr.sequenceParameters = seq
+
+    ds.write_xml_header(hdr.toXML())
+
+    # add acquisitions with trajectory information
+    for idx, adc_data in enumerate(adc_data_list):
+        acq = ismrmrd.Acquisition()
+        acq.resize(n_readout, num_channels)
+        acq.data[:] = adc_data
+
+        acq.center_sample = round(n_readout / 2)
+
+        acq.idx.kspace_encode_step_1 = adc_labels.get('LIN')[idx] if 'LIN' in adc_labels else 0
+        acq.idx.kspace_encode_step_2 = adc_labels.get('PAR')[idx] if 'PAR' in adc_labels else 0
+        acq.idx.slice = adc_labels.get('SLC')[idx] if 'SLC' in adc_labels else 0
+        acq.idx.contrast = adc_labels.get('ECO')[idx] if 'ECO' in adc_labels else 0
+        acq.idx.repetition = adc_labels.get('REP')[idx] if 'REP' in adc_labels else 0
+        acq.idx.phase = adc_labels.get('PHS')[idx] if 'PHS' in adc_labels else 0
+        acq.idx.set = adc_labels.get('SET')[idx] if 'SET' in adc_labels else 0
+
+        acq.read_dir = (1.0, 0.0, 0.0)
+        acq.phase_dir = (0.0, 1.0, 0.0)
+        acq.slice_dir = (0.0, 0.0, 1.0)
+
+        # Flags
+        if adc_labels.get('NAV', 0)[idx]:
+            acq.setFlag(ismrmrd.ACQ_IS_NAVIGATION_DATA)
+
+        if adc_labels.get('NOISE', 0)[idx]:
+            acq.setFlag(ismrmrd.ACQ_IS_NOISE_MEASUREMENT)
+
         ds.append_acquisition(acq)
 
     ds.close()

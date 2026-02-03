@@ -207,7 +207,7 @@ def t2_t1rho_tse_spiral_kernel(
             dwell_time=adc.dwell,
             k1_limits=Limits(min=0, max=len(gx), center=0),
             k2_limits=Limits(min=0, max=n_slice_encoding, center=n_slice_encoding // 2),
-            slice_limits=Limits(),
+            h1_resonance_freq=system.gamma * system.B0,
         )
 
         # write header to file

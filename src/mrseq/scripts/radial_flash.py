@@ -197,7 +197,7 @@ def radial_flash_kernel(
             dwell_time=adc.dwell,
             slice_limits=Limits(min=0, max=n_slices, center=0),
             k1_limits=Limits(min=0, max=n_spokes, center=0),
-            k2_limits=Limits(min=0, max=1, center=0),
+            h1_resonance_freq=system.gamma * system.B0,
         )
 
         # write header to file

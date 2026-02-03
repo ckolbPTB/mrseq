@@ -29,7 +29,7 @@ def t2_tse_cartesian_kernel(
     readout_oversampling: int,
     gz_crusher_duration: float,
     gz_crusher_area: float,
-    n_receiver_gain_calibration: int,
+    ge_segment_delay: float,
 ) -> tuple[pp.Sequence, float]:
     """Generate a Cartesian TSE sequence for T2-mapping.
 
@@ -73,8 +73,8 @@ def t2_tse_cartesian_kernel(
         Duration of the crusher gradients applied around the 180° pulse.
     gz_crusher_area
         Area (zeroth gradient moment) of the crusher gradients applied around the 180° pulse.
-    n_receiver_gain_calibration
-        Number of readouts for receiver gain calibration (needed for GE scanners)
+    ge_segment_delay
+        Delay time at the end of each segment for GE scanners.
 
     Returns
     -------
@@ -181,10 +181,13 @@ def t2_tse_cartesian_kernel(
     print(f'\nCurrent echo time = {(te) * 1000:.3f} ms')
 
     # recceiver gain calibration (needed for GE scanners)
-    seq.add_block(pp.make_label(type='SET', label='NAV', value=True))
+    n_receiver_gain_calibration = 1
     for _ in range(n_receiver_gain_calibration):
+        seq.add_block(
+            pp.make_label(type='SET', label='NAV', value=True), pp.make_label(type='SET', label='TRID', value=33)
+        )
         _start_time_tr_block = sum(seq.block_durations.values())
-        seq.add_block(rf_ex, gz_ex, pp.make_label(type='SET', label='TRID', value=33))
+        seq.add_block(rf_ex, gz_ex)
         seq.add_block(gzr_ex)
         seq.add_block(pp.make_delay(tau1))
 
@@ -205,21 +208,11 @@ def t2_tse_cartesian_kernel(
         seq.add_block(gx_post)
 
         duration_tr_block = sum(seq.block_durations.values()) - _start_time_tr_block
-        tr_delay = round_to_raster(tr - duration_tr_block, system.block_duration_raster)
+        tr_delay = round_to_raster(tr - duration_tr_block - ge_segment_delay, system.block_duration_raster)
         if tr_delay < 0:
             raise ValueError('Desired TR too short for given sequence parameters.')
         seq.add_block(pp.make_delay(tr_delay))
-    seq.add_block(pp.make_label(type='SET', label='NAV', value=False))
-
-    # obtain noise samples
-    seq.add_block(
-        pp.make_label(label='LIN', type='SET', value=0),
-        pp.make_label(label='SLC', type='SET', value=0),
-        pp.make_label(type='SET', label='TRID', value=99),
-    )
-    seq.add_block(adc, pp.make_label(label='NOISE', type='SET', value=True))
-    seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))
-    seq.add_block(pp.make_delay(system.rf_dead_time))
+        seq.add_block(pp.make_label(type='SET', label='NAV', value=False))
 
     # add all events to the sequence
     for se in range(n_slice_encoding):
@@ -275,10 +268,20 @@ def t2_tse_cartesian_kernel(
                     seq.add_block(pp.make_delay(tau3))
 
             duration_tr_block = sum(seq.block_durations.values()) - _start_time_tr_block
-            tr_delay = round_to_raster(tr - duration_tr_block, system.block_duration_raster)
+            tr_delay = round_to_raster(tr - duration_tr_block - ge_segment_delay, system.block_duration_raster)
             if tr_delay < 0:
                 raise ValueError('Desired TR too short for given sequence parameters.')
             seq.add_block(pp.make_delay(tr_delay))
+
+    # obtain noise samples
+    seq.add_block(
+        pp.make_label(label='LIN', type='SET', value=0),
+        pp.make_label(label='SLC', type='SET', value=0),
+        pp.make_label(type='SET', label='TRID', value=99),
+    )
+    seq.add_block(adc, pp.make_label(label='NOISE', type='SET', value=True))
+    seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))
+    seq.add_block(pp.make_delay(system.rf_dead_time))
 
     return seq, min_te
 
@@ -364,7 +367,7 @@ def main(
         readout_oversampling=readout_oversampling,
         gz_crusher_duration=gz_crusher_duration,
         gz_crusher_area=gz_crusher_area,
-        n_receiver_gain_calibration=0,
+        ge_segment_delay=0.0,
     )
 
     # check timing of the sequence
