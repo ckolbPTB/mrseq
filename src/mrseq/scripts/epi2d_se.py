@@ -165,7 +165,7 @@ def epi2d_se_kernel(
     gz180n = pp.make_extended_trapezoid(
         channel='z',
         system=system,
-        times=np.array([*gzr1_t, *gzr2_t + gzr1_t[3] + gz180.flat_time]),
+        times=np.array([*gzr1_t, *gzr2_t + gzr1_t[-1] + gz180.flat_time]),
         amplitudes=np.array([*gzr1_a, *gzr2_a]),
     )
 
@@ -522,12 +522,7 @@ def main(
     # plt.show()
 
     if show_plots:
-        _, axs1, _, axs2 = seq.plot(time_range=(0, 10 * (tr or min_tr)), plot_now=False)
-        for ax in [*axs1, *axs2]:
-            ax.axvline(t_exc, color='red')
-            ax.axvline(t_ref, color='red')
-            ax.axvline(t_echo, color='red')
-        plt.show()
+        seq.plot(time_range=(0, 10 * (tr or min_tr)), plot_now=False)
 
     return seq, output_path / filename
 
