@@ -22,6 +22,7 @@ def t1_inv_rec_se_single_line_kernel(
     rf_inv_duration: float,
     rf_inv_spoil_risetime: float,
     rf_inv_spoil_flattime: float,
+    rf_inv_mu: float,
     gx_pre_duration: float,
     gx_flat_time: float,
     rf90_duration: float,
@@ -34,6 +35,7 @@ def t1_inv_rec_se_single_line_kernel(
     rf180_apodization: float,
     gz_spoil_duration: float,
     gz_spoil_area: float,
+    ge_segment_delay: float,
 ) -> tuple[pp.Sequence, float, float]:
     """Generate a SE-based inversion recovery sequence with one inversion pulse before every readout.
 
@@ -61,6 +63,8 @@ def t1_inv_rec_se_single_line_kernel(
         Rise time of spoiler after inversion pulse (in seconds)
     rf_inv_spoil_flattime
         Flat time of spoiler after inversion pulse (in seconds)
+    rf_inv_mu
+        Constant determining amplitude of frequency sweep of adiabatic inversion pulse
     gx_pre_duration
         Duration of readout pre-winder gradient (in seconds)
     gx_flat_time
@@ -85,6 +89,8 @@ def t1_inv_rec_se_single_line_kernel(
         Duration of spoiler (crusher) gradient applied around 180° pulse and after readout (in seconds)
     gz_spoil_area
         Area / zeroth gradient moment of spoiler (crusher) gradient applied around 180° pulse and after readout
+    ge_segment_delay
+        Delay time at the end of each segment for GE scanners.
 
     Returns
     -------
@@ -208,6 +214,7 @@ def t1_inv_rec_se_single_line_kernel(
                 rf_duration=rf_inv_duration,
                 spoiler_ramp_time=rf_inv_spoil_risetime,
                 spoiler_flat_time=rf_inv_spoil_flattime,
+                rf_mu=rf_inv_mu,
             )
 
             # calculate and add inversion time (TI) delay.
@@ -221,7 +228,7 @@ def t1_inv_rec_se_single_line_kernel(
             seq.add_block(pp.make_delay(ti_delay))
 
             # add 90° excitation pulse followed by rewinder gradient
-            seq.add_block(rf90, gz90)
+            seq.add_block(rf90, gz90, pp.make_label(type='SET', label='TRID', value=1))
             seq.add_block(gz90_reph)
 
             # add gradients and refocusing pulse
@@ -256,6 +263,16 @@ def t1_inv_rec_se_single_line_kernel(
                 raise ValueError('Desired TR too short for given sequence parameters.')
 
             seq.add_block(pp.make_delay(tr_delay))
+
+    # obtain noise samples
+    seq.add_block(
+        pp.make_label(label='LIN', type='SET', value=0),
+        pp.make_label(label='SLC', type='SET', value=0),
+        pp.make_label(type='SET', label='TRID', value=99),
+    )
+    seq.add_block(adc, pp.make_label(label='NOISE', type='SET', value=True))
+    seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))
+    seq.add_block(pp.make_delay(system.rf_dead_time))
 
     return seq, time_to_first_tr_block, min_te
 
@@ -318,6 +335,7 @@ def main(
     rf_inv_duration = 10.24e-3  # duration of adiabatic inversion pulse [s]
     rf_inv_spoil_risetime = 0.6e-3  # rise time of spoiler after inversion pulse [s]
     rf_inv_spoil_flattime = 8.4e-3  # flat time of spoiler after inversion pulse [s]
+    rf_inv_mu = 4.9  # constant determining amplitude of frequency sweep of adiabatic inversion pulse
 
     # define ADC and gradient timing
     adc_dwell = system.grad_raster_time
@@ -352,6 +370,7 @@ def main(
         rf_inv_duration=rf_inv_duration,
         rf_inv_spoil_risetime=rf_inv_spoil_risetime,
         rf_inv_spoil_flattime=rf_inv_spoil_flattime,
+        rf_inv_mu=rf_inv_mu,
         gx_pre_duration=gx_pre_duration,
         gx_flat_time=gx_flat_time,
         rf90_duration=rf90_duration,
@@ -364,6 +383,7 @@ def main(
         rf180_apodization=rf180_apodization,
         gz_spoil_duration=gz_spoil_duration,
         gz_spoil_area=gz_spoil_area,
+        ge_segment_delay=0.0,
     )
 
     # check timing of the sequence

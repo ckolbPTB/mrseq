@@ -31,6 +31,7 @@ def t1_t2_spiral_cmrf_kernel(
     rf_inv_duration: float,
     rf_inv_spoil_risetime: float,
     rf_inv_spoil_flattime: float,
+    rf_inv_mu: float,
     rf_duration: float,
     rf_bwt: float,
     rf_apodization: float,
@@ -65,6 +66,8 @@ def t1_t2_spiral_cmrf_kernel(
         Rise time of spoiler after inversion pulse (in seconds)
     rf_inv_spoil_flattime
         Flat time of spoiler after inversion pulse (in seconds)
+    rf_inv_mu
+        Constant determining amplitude of frequency sweep of adiabatic inversion pulse
     rf_duration
         Duration of the rf excitation pulse (in seconds)
     rf_bwt
@@ -228,6 +231,7 @@ def t1_t2_spiral_cmrf_kernel(
                 rf_duration=rf_inv_duration,
                 spoiler_ramp_time=rf_inv_spoil_risetime,
                 spoiler_flat_time=rf_inv_spoil_flattime,
+                rf_mu=rf_inv_mu,
                 system=system,
             )
             constant_trig_delay = min_cardiac_trigger_delay - prep_dur
@@ -379,6 +383,7 @@ def main(
     rf_inv_duration = 10.24e-3  # duration of adiabatic inversion pulse [s]
     rf_inv_spoil_risetime = 0.6e-3  # rise time of spoiler after inversion pulse [s]
     rf_inv_spoil_flattime = 8.4e-3  # flat time of spoiler after inversion pulse [s]
+    rf_inv_mu = 4.9  # constant determining amplitude of frequency sweep of adiabatic inversion pulse
 
     # define settings of rf excitation pulse
     rf_duration = 0.8e-3  # duration of the rf excitation pulse [s]
@@ -409,6 +414,7 @@ def main(
         rf_inv_duration=rf_inv_duration,
         rf_inv_spoil_risetime=rf_inv_spoil_risetime,
         rf_inv_spoil_flattime=rf_inv_spoil_flattime,
+        rf_inv_mu=rf_inv_mu,
         rf_duration=rf_duration,
         rf_bwt=rf_bwt,
         rf_apodization=rf_apodization,

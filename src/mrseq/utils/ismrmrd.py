@@ -327,7 +327,7 @@ def combine_ismrmrd_files(data_file: Path, meta_file: Path, filename_ext: str = 
 
 
 def ismrmrd_from_sequence(adc_data_list: Sequence[np.ndarray], filename_seq: str, filename_mrd: str) -> ismrmrd.Dataset:
-    """Create ismrmrd file based on .
+    """Create ismrmrd file based on list of adc data and pulseq sequence file.
 
     Parameters
     ----------
@@ -335,7 +335,7 @@ def ismrmrd_from_sequence(adc_data_list: Sequence[np.ndarray], filename_seq: str
         list of numpy arrays where each array is one acquisition raw data block
     filename_seq
         filename for sequence file
-    filename_ext
+    filename_mrd
         filename for output ISMRMRD file
 
     Returns
@@ -428,7 +428,7 @@ def ismrmrd_from_sequence(adc_data_list: Sequence[np.ndarray], filename_seq: str
 
         # Flags
         if adc_labels.get('NAV', 0)[idx]:
-            acq.setFlag(ismrmrd.ACQ_IS_NAVIGATION_DATA)
+            acq.setFlag(ismrmrd.ACQ_IS_PHASECORR_DATA)
 
         if adc_labels.get('NOISE', 0)[idx]:
             acq.setFlag(ismrmrd.ACQ_IS_NOISE_MEASUREMENT)

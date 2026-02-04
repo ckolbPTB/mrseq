@@ -68,7 +68,7 @@ def add_t1rho_prep(
         system=system,
         use='preparation',
     )
-    seq.add_block(rf_pre)
+    seq.add_block(rf_pre, pp.make_label(type='SET', label='TRID', value=71))
 
     # spin-lock pulse without phase offset
     # calculate flip angle of spin-lock block pulse because make_block_pulse does not support b1 amp argument

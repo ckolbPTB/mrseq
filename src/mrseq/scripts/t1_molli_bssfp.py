@@ -31,6 +31,10 @@ def t1_molli_bssfp_kernel(
     rf_flip_angle: float,
     rf_bwt: float,
     rf_apodization: float,
+    rf_inv_duration: float,
+    rf_inv_spoil_risetime: float,
+    rf_inv_spoil_flattime: float,
+    rf_inv_mu: float,
 ) -> tuple[pp.Sequence, float, float]:
     """Generate a 5(3)3 MOLLI sequence with bSSFP readout for cardiac T1 mapping.
 
@@ -73,6 +77,14 @@ def t1_molli_bssfp_kernel(
         Bandwidth-time product of rf excitation pulse (Hz * seconds)
     rf_apodization
         Apodization factor of rf excitation pulse
+    rf_inv_duration
+        Duration of adiabatic inversion pulse (in seconds)
+    rf_inv_spoil_risetime
+        Rise time of spoiler after inversion pulse (in seconds)
+    rf_inv_spoil_flattime
+        Flat time of spoiler after inversion pulse (in seconds)
+    rf_inv_mu
+        Constant determining amplitude of frequency sweep of adiabatic inversion pulse
 
     Returns
     -------
@@ -97,6 +109,7 @@ def t1_molli_bssfp_kernel(
         delay=system.rf_dead_time,
         system=system,
         return_gz=True,
+        max_slew=system.max_slew * 0.8,
         use='excitation',
     )
 
@@ -125,10 +138,7 @@ def t1_molli_bssfp_kernel(
     )
 
     # calculate minimum echo time
-    if te is None:
-        gzr_gx_dur = pp.calc_duration(gzr, gx_pre)  # gzr and gx_pre are applied simultaneously
-    else:
-        gzr_gx_dur = pp.calc_duration(gzr) + pp.calc_duration(gx_pre)  # gzr and gx_pre are applied sequentially
+    gzr_gx_dur = pp.calc_duration(gzr) + pp.calc_duration(gx_pre)  # gzr and gx_pre are applied sequentially
 
     min_te = (
         rf.shape_dur / 2  # time from center to end of RF pulse
@@ -153,7 +163,8 @@ def t1_molli_bssfp_kernel(
         pp.calc_duration(gz)  # rf pulse
         + gzr_gx_dur  # slice selection re-phasing gradient and readout pre-winder
         + pp.calc_duration(gx)  # readout gradient
-        + pp.calc_duration(gzr, gx_post)  # readout or slice rewinder
+        + pp.calc_duration(gx_post)  # readout/phase rewinder
+        + pp.calc_duration(gzr)  # slice rewinder
     )
 
     # calculate repetition time delay (tr_delay)
@@ -180,14 +191,14 @@ def t1_molli_bssfp_kernel(
         default_duration=0.8 - min_cardiac_trigger_delay,
     )
 
-    # obtain noise samples
-    seq.add_block(pp.make_label(label='LIN', type='SET', value=0), pp.make_label(label='SLC', type='SET', value=0))
-    seq.add_block(adc, pp.make_label(label='NOISE', type='SET', value=True))
-    seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))
-    seq.add_block(pp.make_delay(system.rf_dead_time))
-
     # Create inversion pulse
-    t1_inv_prep, block_duration, time_since_inversion = add_t1_inv_prep(system=system)
+    t1_inv_prep, block_duration, time_since_inversion = add_t1_inv_prep(
+        system=system,
+        rf_duration=rf_inv_duration,
+        spoiler_flat_time=rf_inv_spoil_flattime,
+        spoiler_ramp_time=rf_inv_spoil_risetime,
+        rf_mu=rf_inv_mu,
+    )
 
     # In the first part 5 images are acquired in 5 cardiac cycles, followed by 3 cardiac cycles without data
     # acquisition for signal recovery. Then 3 images are acquired in 3 cardiac cycles in the second part.
@@ -215,10 +226,10 @@ def t1_molli_bssfp_kernel(
                     raise ValueError('Minimum trigger delay is to small for selected inversion times.')
 
                 # add trigger and constant part of trigger delay
-                seq.add_block(pp.make_trigger(channel='physio1', duration=constant_trig_delay))
+                # seq.add_block(pp.make_trigger(channel='physio1', duration=constant_trig_delay))
 
                 # add variable part of trigger delay (soft delay)
-                seq.add_block(trig_soft_delay)
+                # seq.add_block(trig_soft_delay)
 
                 # add inversion pulse
                 for idx in t1_inv_prep.block_events:
@@ -240,10 +251,10 @@ def t1_molli_bssfp_kernel(
                     raster_time=system.block_duration_raster,
                 )
                 # add trigger and constant part of trigger delay
-                seq.add_block(pp.make_trigger(channel='physio1', duration=constant_trig_delay))
+                # seq.add_block(pp.make_trigger(channel='physio1', duration=constant_trig_delay))
 
                 # add variable part of trigger delay (soft delay)
-                seq.add_block(trig_soft_delay)
+                # seq.add_block(trig_soft_delay)
 
             rf_signal = rf.signal.copy()
             for pe_index in range(-n_bssfp_startup_pulses, len(pe_steps)):
@@ -259,7 +270,7 @@ def t1_molli_bssfp_kernel(
                 else:
                     rf.phase_offset = 0.0
                     adc.phase_offset = 0.0
-                seq.add_block(rf, gz)
+                seq.add_block(rf, gz, pp.make_label(type='SET', label='TRID', value=2 if pe_index < 0 else 1))
 
                 # set labels for the next spoke
                 labels = []
@@ -277,12 +288,9 @@ def t1_molli_bssfp_kernel(
                     system=system,
                 )
 
-                if te is not None:
-                    seq.add_block(gzr)
-                    seq.add_block(pp.make_delay(te_delay))
-                    seq.add_block(gx_pre, gy_pre, *labels)
-                else:
-                    seq.add_block(gx_pre, gy_pre, gzr, *labels)
+                seq.add_block(gzr)
+                seq.add_block(pp.make_delay(te_delay))
+                seq.add_block(gx_pre, gy_pre, *labels)
 
                 # add the readout gradient and ADC
                 if pe_index >= 0:
@@ -291,7 +299,8 @@ def t1_molli_bssfp_kernel(
                     seq.add_block(gx)
 
                 gy_pre.amplitude = -gy_pre.amplitude
-                seq.add_block(gx_post, gy_pre, gzr)
+                seq.add_block(gx_post, gy_pre)
+                seq.add_block(gzr)
 
                 # add delay in case TR > min_TR
                 if tr_delay > 0:
@@ -302,11 +311,22 @@ def t1_molli_bssfp_kernel(
         # add three cardiac cycles for signal recovery
         if part_idx == 0:
             for _cardiac_index in range(3):
+                print(_cardiac_index)
                 # add trigger and constant part of trigger delay
-                seq.add_block(pp.make_trigger(channel='physio1', duration=min_cardiac_trigger_delay))
+                # seq.add_block(pp.make_trigger(channel='physio1', duration=min_cardiac_trigger_delay))
 
                 # add variable part of trigger delay (soft delay)
-                seq.add_block(trig_soft_delay)
+                # seq.add_block(trig_soft_delay)
+
+    # obtain noise samples
+    seq.add_block(
+        pp.make_label(label='LIN', type='SET', value=0),
+        pp.make_label(label='SLC', type='SET', value=0),
+        pp.make_label(type='SET', label='TRID', value=99),
+    )
+    seq.add_block(adc, pp.make_label(label='NOISE', type='SET', value=True))
+    seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))
+    seq.add_block(pp.make_delay(system.rf_dead_time))
 
     return seq, min_te, min_tr
 
@@ -372,6 +392,12 @@ def main(
     if inversion_times is None:
         inversion_times = np.asarray([0.1, 0.18])
 
+    # define T1prep settings
+    rf_inv_duration = 10.24e-3  # duration of adiabatic inversion pulse [s]
+    rf_inv_spoil_risetime = 0.6e-3  # rise time of spoiler after inversion pulse [s]
+    rf_inv_spoil_flattime = 8.4e-3  # flat time of spoiler after inversion pulse [s]
+    rf_inv_mu = 4.9  # constant determining amplitude of frequency sweep of adiabatic inversion pulse
+
     # define settings of rf excitation pulse
     rf_duration = 0.5e-3  # duration of the rf excitation pulse [s]
     rf_flip_angle = 35  # flip angle of rf excitation pulse [°]
@@ -417,6 +443,10 @@ def main(
         rf_flip_angle=rf_flip_angle,
         rf_bwt=rf_bwt,
         rf_apodization=rf_apodization,
+        rf_inv_duration=rf_inv_duration,
+        rf_inv_spoil_risetime=rf_inv_spoil_risetime,
+        rf_inv_spoil_flattime=rf_inv_spoil_flattime,
+        rf_inv_mu=rf_inv_mu,
     )
 
     # check timing of the sequence

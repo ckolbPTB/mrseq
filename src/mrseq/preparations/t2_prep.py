@@ -49,7 +49,7 @@ def add_composite_refocusing_block(
     time_start = sum(seq.block_durations.values())
 
     # add RF pulses to sequence
-    for fa, phase, dur in zip(flip_angles, phases, durations, strict=True):
+    for idx, fa, phase, dur in enumerate(zip(flip_angles, phases, durations, strict=True)):
         rf = pp.make_block_pulse(
             flip_angle=fa * np.pi / 180,
             delay=system.rf_dead_time,
@@ -58,7 +58,10 @@ def add_composite_refocusing_block(
             system=system,
             use='preparation',
         )
-        seq.add_block(rf)
+        if idx == 0:
+            seq.add_block(rf, pp.make_label(type='SET', label='TRID', value=72))
+        else:
+            seq.add_block(rf)
 
     # calculate total block duration
     block_duration = sum(seq.block_durations.values()) - time_start
