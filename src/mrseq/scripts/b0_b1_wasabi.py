@@ -86,6 +86,7 @@ def wasabi_gre_centric_kernel(
     rf_prep = pp.make_block_pulse(
         flip_angle=rf_prep_flipangle_rad,
         duration=rf_prep_duration,
+        delay=system.rf_dead_time,
         system=system,
         use='preparation',
     )
@@ -146,7 +147,7 @@ def wasabi_gre_centric_kernel(
         + pp.calc_duration(gzr, gx_pre)  # slice selection re-phasing gradient and readout pre-winder
         + pp.calc_duration(gx)  # readout gradient
         + pp.calc_duration(gz_spoil, gx_post)  # gradient spoiler or readout-re-winder
-    ).item()
+    )
 
     # loop over frequency offsets
     for rep_idx, freq_offset_hz in enumerate(frequency_offsets):
