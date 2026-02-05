@@ -226,10 +226,10 @@ def t1_molli_bssfp_kernel(
                     raise ValueError('Minimum trigger delay is to small for selected inversion times.')
 
                 # add trigger and constant part of trigger delay
-                # seq.add_block(pp.make_trigger(channel='physio1', duration=constant_trig_delay))
+                seq.add_block(pp.make_trigger(channel='physio1', duration=constant_trig_delay))
 
                 # add variable part of trigger delay (soft delay)
-                # seq.add_block(trig_soft_delay)
+                seq.add_block(trig_soft_delay)
 
                 # add inversion pulse
                 for idx in t1_inv_prep.block_events:
@@ -251,10 +251,10 @@ def t1_molli_bssfp_kernel(
                     raster_time=system.block_duration_raster,
                 )
                 # add trigger and constant part of trigger delay
-                # seq.add_block(pp.make_trigger(channel='physio1', duration=constant_trig_delay))
+                seq.add_block(pp.make_trigger(channel='physio1', duration=constant_trig_delay))
 
                 # add variable part of trigger delay (soft delay)
-                # seq.add_block(trig_soft_delay)
+                seq.add_block(trig_soft_delay)
 
             rf_signal = rf.signal.copy()
             for pe_index in range(-n_bssfp_startup_pulses, len(pe_steps)):
@@ -313,10 +313,10 @@ def t1_molli_bssfp_kernel(
             for _cardiac_index in range(3):
                 print(_cardiac_index)
                 # add trigger and constant part of trigger delay
-                # seq.add_block(pp.make_trigger(channel='physio1', duration=min_cardiac_trigger_delay))
+                seq.add_block(pp.make_trigger(channel='physio1', duration=min_cardiac_trigger_delay))
 
                 # add variable part of trigger delay (soft delay)
-                # seq.add_block(trig_soft_delay)
+                seq.add_block(trig_soft_delay)
 
     # obtain noise samples
     seq.add_block(
