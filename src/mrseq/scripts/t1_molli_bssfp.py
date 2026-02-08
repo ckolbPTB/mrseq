@@ -109,7 +109,7 @@ def t1_molli_bssfp_kernel(
         delay=system.rf_dead_time,
         system=system,
         return_gz=True,
-        max_slew=system.max_slew * 0.8,
+        max_slew=system.max_slew,
         use='excitation',
     )
 
@@ -138,7 +138,10 @@ def t1_molli_bssfp_kernel(
     )
 
     # calculate minimum echo time
-    gzr_gx_dur = pp.calc_duration(gzr) + pp.calc_duration(gx_pre)  # gzr and gx_pre are applied sequentially
+    if te is None:
+        gzr_gx_dur = pp.calc_duration(gzr, gx_pre)  # gzr and gx_pre are applied simultaneously
+    else:
+        gzr_gx_dur = pp.calc_duration(gzr) + pp.calc_duration(gx_pre)  # gzr and gx_pre are applied sequentially
 
     min_te = (
         rf.shape_dur / 2  # time from center to end of RF pulse
@@ -288,9 +291,12 @@ def t1_molli_bssfp_kernel(
                     system=system,
                 )
 
-                seq.add_block(gzr)
-                seq.add_block(pp.make_delay(te_delay))
-                seq.add_block(gx_pre, gy_pre, *labels)
+                if te is not None:
+                    seq.add_block(gzr)
+                    seq.add_block(pp.make_delay(te_delay))
+                    seq.add_block(gx_pre, gy_pre, *labels)
+                else:
+                    seq.add_block(gx_pre, gy_pre, gzr, *labels)
 
                 # add the readout gradient and ADC
                 if pe_index >= 0:

@@ -98,7 +98,9 @@ def t1_t2_spiral_cmrf_kernel(
 
     # cMRF specific settings
     n_blocks = 15  # number of heartbeat blocks
-    minimum_time_to_set_label = 1e-5  # minimum time to set a label (in seconds)
+    minimum_time_to_set_label = round_to_raster(
+        1e-5, system.block_duration_raster
+    )  # minimum time to set a label (in seconds)
 
     # create flip angle pattern
     max_flip_angles_deg = [12.5, 18.75, 25, 25, 25, 12.5, 18.75, 25, 25.0, 25, 12.5, 18.75, 25, 25, 25]
