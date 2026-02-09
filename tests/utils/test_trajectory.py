@@ -148,6 +148,7 @@ def test_spiral_acquisition(
 ):
     """Test spiral trajectories for different parameter combinations."""
     g_pre_duration = 2e-3  # make this duration long to work for all combinations
+    system_defaults.adc_dead_time = 100e-6  # make this longer to ensure it impacts the timing
 
     gx, gy, adc, trajectory, time_to_echo = spiral_acquisition(
         system_defaults,
