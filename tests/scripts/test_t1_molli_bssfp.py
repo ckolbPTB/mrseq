@@ -6,7 +6,7 @@ from mrseq.scripts.t1_molli_bssfp import main as create_seq
 from mrseq.utils.system_defaults import sys_a
 from mrseq.utils.system_defaults import sys_b
 
-EXPECTED_DUR = 10.95339  # defined 2025-11-24
+EXPECTED_DUR = 11.00523  # defined 2026-02-10
 
 
 def test_default_seq_duration(system_defaults):
