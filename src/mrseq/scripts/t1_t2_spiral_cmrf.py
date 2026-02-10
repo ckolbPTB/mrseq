@@ -24,6 +24,7 @@ def t1_t2_spiral_cmrf_kernel(
     t2_prep_echo_times: np.ndarray,
     tr: float | None,
     min_cardiac_trigger_delay: float,
+    use_soft_delay: bool,
     fov_xy: float,
     n_readout: int,
     readout_oversampling: Literal[1, 2, 4],
@@ -51,6 +52,9 @@ def t1_t2_spiral_cmrf_kernel(
     min_cardiac_trigger_delay
         Minimum delay after cardiac trigger (in seconds).
         The total trigger delay is implemented as a soft delay and can be chosen by the user in the UI.
+    use_soft_delay
+        Use soft-delay functionality available from pulseq version 1.5.0 to allow UI adaption of trigger delay.
+        If set to false only the min_cardiac_trigger_delay is used.
     fov_xy
         Field of view in x and y direction (in meters).
     n_readout
@@ -200,27 +204,20 @@ def t1_t2_spiral_cmrf_kernel(
         prot.write_xml_header(hdr.toXML('utf-8'))
 
     # create trigger soft delay (total duration: user_input/1.0 - min_cardiac_trigger_delay)
-    trig_soft_delay = pp.make_soft_delay(
-        hint='trig_delay',
-        offset=-min_cardiac_trigger_delay,
-        factor=1.0,
-        default_duration=0.5 - min_cardiac_trigger_delay,
-    )
-
-    # obtain noise samples
-    seq.add_block(pp.make_label(label='LIN', type='SET', value=0), pp.make_label(label='SLC', type='SET', value=0))
-    seq.add_block(adc, pp.make_label(label='NOISE', type='SET', value=True))
-    seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))
-    seq.add_block(pp.make_delay(system.rf_dead_time))
-
-    # add noise acquisition to ISMRMRD file
-    if mrd_header_file:
-        acq = ismrmrd.Acquisition()
-        acq.resize(trajectory_dimensions=2, number_of_samples=adc.num_samples)
-        prot.append_acquisition(acq)
+    if use_soft_delay:
+        trig_soft_delay = pp.make_soft_delay(
+            hint='trig_delay',
+            offset=-min_cardiac_trigger_delay,
+            factor=1.0,
+            default_duration=0.5 - min_cardiac_trigger_delay,
+        )
 
     # initialize LIN label
-    seq.add_block(pp.make_delay(minimum_time_to_set_label), pp.make_label(label='LIN', type='SET', value=0))
+    seq.add_block(
+        pp.make_delay(minimum_time_to_set_label),
+        pp.make_label(label='LIN', type='SET', value=0),
+        pp.make_label(type='SET', label='TRID', value=33),
+    )
 
     # initialize repetition counter
     rep_counter = 0
@@ -240,10 +237,14 @@ def t1_t2_spiral_cmrf_kernel(
             constant_trig_delay = min_cardiac_trigger_delay - prep_dur
 
             # add trigger and constant part of trigger delay
-            seq.add_block(pp.make_trigger(channel='physio1', duration=constant_trig_delay))
+            seq.add_block(
+                pp.make_trigger(channel='physio1', duration=constant_trig_delay),
+                pp.make_label(type='SET', label='TRID', value=44),
+            )
 
             # add variable part of trigger delay (soft delay)
-            seq.add_block(trig_soft_delay)
+            if use_soft_delay:
+                seq.add_block(trig_soft_delay)
 
             # add all events of T1prep block
             for idx in t1prep_block.block_events:
@@ -252,8 +253,12 @@ def t1_t2_spiral_cmrf_kernel(
         # add no preparation for every block following an inversion block
         elif block % 5 == 1:
             # add trigger and trigger delay(s)
-            seq.add_block(pp.make_trigger(channel='physio1', duration=min_cardiac_trigger_delay))
-            seq.add_block(trig_soft_delay)
+            seq.add_block(
+                pp.make_trigger(channel='physio1', duration=min_cardiac_trigger_delay),
+                pp.make_label(type='SET', label='TRID', value=44),
+            )
+            if use_soft_delay:
+                seq.add_block(trig_soft_delay)
 
         # add T2prep for every other block
         else:
@@ -265,14 +270,18 @@ def t1_t2_spiral_cmrf_kernel(
             constant_trig_delay = min_cardiac_trigger_delay - prep_dur
 
             # add trigger and constant part of trigger delay
-            seq.add_block(pp.make_trigger(channel='physio1', duration=constant_trig_delay))
+            seq.add_block(
+                pp.make_trigger(channel='physio1', duration=constant_trig_delay),
+                pp.make_label(type='SET', label='TRID', value=44),
+            )
 
             # add variable part of trigger delay (soft delay)
-            seq.add_block(trig_soft_delay)
+            if use_soft_delay:
+                seq.add_block(trig_soft_delay)
 
             # add all events of T2prep block
-            for idx in t2prep_block.block_events:
-                seq.add_block(t2prep_block.get_block(idx))
+            # for idx in t2prep_block.block_events:
+            #    seq.add_block(t2prep_block.get_block(idx)), pp.make_label(type='SET', label='TRID', value=80+idx)
 
         # loop over shots / repetitions per block
         for _ in range(n_shots_per_block):
@@ -300,13 +309,15 @@ def t1_t2_spiral_cmrf_kernel(
             )
 
             # add slice selective excitation pulse
-            seq.add_block(rf_n, gz_n)
+            seq.add_block(rf_n, gz_n, pp.make_label(type='SET', label='TRID', value=1))
 
             # add slice selection re-phasing gradient
             seq.add_block(gzr_n)
 
             # add readout gradients and ADC
-            seq.add_block(gx[spiral_idx], gy[spiral_idx], adc)
+            # seq.add_block(gx[spiral_idx], gy[spiral_idx], adc)
+            seq.add_block(gx[11], gy[11], adc)
+            # print(pp.calc_duration(gx[spiral_idx], gy[spiral_idx], adc))
 
             # add spoiler
             seq.add_block(gz_spoil)
@@ -329,6 +340,23 @@ def t1_t2_spiral_cmrf_kernel(
 
             # increment repetition counter
             rep_counter += 1
+
+    # obtain noise samples
+    seq.add_block(
+        pp.make_delay(0.1),
+        pp.make_label(label='LIN', type='SET', value=0),
+        pp.make_label(label='SLC', type='SET', value=0),
+        pp.make_label(type='SET', label='TRID', value=99),
+    )
+    seq.add_block(adc, pp.make_label(label='NOISE', type='SET', value=True))
+    seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))
+    seq.add_block(pp.make_delay(system.rf_dead_time))
+
+    # add noise acquisition to ISMRMRD file
+    if mrd_header_file:
+        acq = ismrmrd.Acquisition()
+        acq.resize(trajectory_dimensions=2, number_of_samples=adc.num_samples)
+        prot.append_acquisition(acq)
 
     # close ISMRMRD header file
     if mrd_header_file:
@@ -419,6 +447,7 @@ def main(
         t2_prep_echo_times=t2_prep_echo_times,
         tr=tr,
         min_cardiac_trigger_delay=np.max(t2_prep_echo_times) + 0.05,  # max T2prep echo time and buffer for spoiler
+        use_soft_delay=True,
         fov_xy=fov_xy,
         n_readout=n_readout,
         readout_oversampling=readout_oversampling,

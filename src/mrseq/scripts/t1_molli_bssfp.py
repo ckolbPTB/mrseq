@@ -19,6 +19,7 @@ def t1_molli_bssfp_kernel(
     tr: float | None,
     inversion_times: np.ndarray,
     min_cardiac_trigger_delay: float,
+    use_soft_delay: bool,
     fov_xy: float,
     n_readout: int,
     readout_oversampling: float,
@@ -52,6 +53,9 @@ def t1_molli_bssfp_kernel(
     min_cardiac_trigger_delay
         Minimum delay after cardiac trigger (in seconds).
         The total trigger delay is implemented as a soft delay and can be chosen by the user in the UI.
+    use_soft_delay
+        Use soft-delay functionality available from pulseq version 1.5.0 to allow UI adaption of trigger delay.
+        If set to false only the min_cardiac_trigger_delay is used.
     fov_xy
         Field of view in x and y direction (in meters).
     n_readout
@@ -87,6 +91,7 @@ def t1_molli_bssfp_kernel(
     rf_inv_mu
         Constant determining amplitude of frequency sweep of adiabatic inversion pulse
 
+
     Returns
     -------
     seq
@@ -113,6 +118,10 @@ def t1_molli_bssfp_kernel(
         max_slew=system.max_slew,
         use='excitation',
     )
+    # reduce slew rate of gz-rewinder which overlaps with readout pre-winder
+    gzr = pp.make_trapezoid(
+        channel='z', area=gzr.area, duration=gx_pre_duration, max_slew=system.max_slew * 0.4, system=system
+    )
 
     # create readout gradient and ADC
     delta_k = 1 / fov_xy
@@ -123,9 +132,21 @@ def t1_molli_bssfp_kernel(
 
     print(f'Current receiver bandwidth = {1 / gx.flat_time:.0f} Hz/pixel')
 
-    # create frequency encoding pre- and re-winder gradient
-    gx_pre = pp.make_trapezoid(channel='x', area=-gx.area / 2 - delta_k / 2, duration=gx_pre_duration, system=system)
-    gx_post = pp.make_trapezoid(channel='x', area=-gx.area / 2 + delta_k / 2, duration=gx_pre_duration, system=system)
+    # create frequency encoding pre- and re-winder gradient, reduce slew rate because all three gradients are used at the same time
+    gx_pre = pp.make_trapezoid(
+        channel='x',
+        area=-gx.area / 2 - delta_k / 2,
+        duration=gx_pre_duration,
+        system=system,
+        max_slew=system.max_slew * 0.8,
+    )
+    gx_post = pp.make_trapezoid(
+        channel='x',
+        area=-gx.area / 2 + delta_k / 2,
+        duration=gx_pre_duration,
+        system=system,
+        max_slew=system.max_slew * 0.8,
+    )
     k0_center_id = np.where((np.arange(n_readout_with_oversampling) - n_readout_with_oversampling / 2) * delta_k == 0)[
         0
     ][0]
@@ -188,12 +209,13 @@ def t1_molli_bssfp_kernel(
     print(f'Acquisition window per cardiac cycle = {current_tr * len(pe_steps) * 1000:.3f} ms')
 
     # create trigger soft delay (total duration: user_input/1.0 - min_cardiac_trigger_delay)
-    trig_soft_delay = pp.make_soft_delay(
-        hint='trig_delay',
-        offset=-min_cardiac_trigger_delay,
-        factor=1.0,
-        default_duration=0.8 - min_cardiac_trigger_delay,
-    )
+    if use_soft_delay:
+        trig_soft_delay = pp.make_soft_delay(
+            hint='trig_delay',
+            offset=-min_cardiac_trigger_delay,
+            factor=1.0,
+            default_duration=0.8 - min_cardiac_trigger_delay,
+        )
 
     # Create inversion pulse
     t1_inv_prep, block_duration, time_since_inversion = add_t1_inv_prep(
@@ -230,10 +252,14 @@ def t1_molli_bssfp_kernel(
                     raise ValueError('Minimum trigger delay is to small for selected inversion times.')
 
                 # add trigger and constant part of trigger delay
-                seq.add_block(pp.make_trigger(channel='physio1', duration=constant_trig_delay))
+                seq.add_block(
+                    pp.make_trigger(channel='physio1', duration=constant_trig_delay),
+                    pp.make_label(type='SET', label='TRID', value=44),
+                )
 
                 # add variable part of trigger delay (soft delay)
-                seq.add_block(trig_soft_delay)
+                if use_soft_delay:
+                    seq.add_block(trig_soft_delay)
 
                 # add inversion pulse
                 for idx in t1_inv_prep.block_events:
@@ -255,10 +281,14 @@ def t1_molli_bssfp_kernel(
                     raster_time=system.block_duration_raster,
                 )
                 # add trigger and constant part of trigger delay
-                seq.add_block(pp.make_trigger(channel='physio1', duration=constant_trig_delay))
+                seq.add_block(
+                    pp.make_trigger(channel='physio1', duration=constant_trig_delay),
+                    pp.make_label(type='SET', label='TRID', value=44),
+                )
 
                 # add variable part of trigger delay (soft delay)
-                seq.add_block(trig_soft_delay)
+                if use_soft_delay:
+                    seq.add_block(trig_soft_delay)
 
             rf_signal = rf.signal.copy()
             for pe_index in range(-n_bssfp_startup_pulses, len(pe_steps)):
@@ -274,7 +304,7 @@ def t1_molli_bssfp_kernel(
                 else:
                     rf.phase_offset = 0.0
                     adc.phase_offset = 0.0
-                seq.add_block(rf, gz, pp.make_label(type='SET', label='TRID', value=2 if pe_index < 0 else 1))
+                seq.add_block(rf, gz, pp.make_label(type='SET', label='TRID', value=4 if pe_index < 0 else 3))
 
                 # set labels for the next spoke
                 labels = []
@@ -284,12 +314,13 @@ def t1_molli_bssfp_kernel(
                 )
                 labels.append(pp.make_label(type='SET', label='ECO', value=int(contrast_index)))
 
-                # calculate current phase encoding gradient
+                # current phase encoding gradient, reduce slew rate because all three gradients are on at the same time
                 gy_pre = pp.make_trapezoid(
                     channel='y',
                     area=delta_k * pe_steps[pe_index if pe_index >= 0 else 0],
                     duration=gx_pre_duration,
                     system=system,
+                    max_slew=system.max_slew * 0.8,
                 )
 
                 if te is not None:
@@ -306,8 +337,7 @@ def t1_molli_bssfp_kernel(
                     seq.add_block(gx)
 
                 gy_pre.amplitude = -gy_pre.amplitude
-                seq.add_block(gx_post, gy_pre)
-                seq.add_block(gzr)
+                seq.add_block(gx_post, gy_pre, gzr)
 
                 # add delay in case TR > min_TR
                 if tr_delay > 0:
@@ -318,15 +348,19 @@ def t1_molli_bssfp_kernel(
         # add three cardiac cycles for signal recovery
         if part_idx == 0:
             for _cardiac_index in range(3):
-                print(_cardiac_index)
                 # add trigger and constant part of trigger delay
-                seq.add_block(pp.make_trigger(channel='physio1', duration=min_cardiac_trigger_delay))
+                seq.add_block(
+                    pp.make_trigger(channel='physio1', duration=min_cardiac_trigger_delay),
+                    pp.make_label(type='SET', label='TRID', value=44),
+                )
 
                 # add variable part of trigger delay (soft delay)
-                seq.add_block(trig_soft_delay)
+                if use_soft_delay:
+                    seq.add_block(trig_soft_delay)
 
     # obtain noise samples
     seq.add_block(
+        pp.make_delay(0.1),
         pp.make_label(label='LIN', type='SET', value=0),
         pp.make_label(label='SLC', type='SET', value=0),
         pp.make_label(type='SET', label='TRID', value=99),
@@ -440,6 +474,7 @@ def main(
         inversion_times=inversion_times,
         min_cardiac_trigger_delay=np.max(inversion_times)
         + 0.02,  # max inversion time + approx inversion pulse duration
+        use_soft_delay=True,
         fov_xy=fov_xy,
         n_readout=n_readout,
         readout_oversampling=readout_oversampling,
