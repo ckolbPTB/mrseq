@@ -409,7 +409,7 @@ def main(
     rf_inv_mu = 4.9  # constant determining amplitude of frequency sweep of adiabatic inversion pulse
 
     # define settings of rf excitation pulse
-    rf_duration = 0.5e-3  # duration of the rf excitation pulse [s]
+    rf_duration = 0.6e-3  # duration of the rf excitation pulse [s]
     rf_flip_angle = 35  # flip angle of rf excitation pulse [°]
     rf_bwt = 1.5  # bandwidth-time product of rf excitation pulse [Hz*s]
     rf_apodization = 0.5  # apodization factor of rf excitation pulse

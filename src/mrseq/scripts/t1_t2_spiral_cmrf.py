@@ -153,7 +153,7 @@ def t1_t2_spiral_cmrf_kernel(
 
     # calculate minimum echo time (TE) for sequence header
     min_te = pp.calc_duration(gz_dummy) / 2 + pp.calc_duration(gzr_dummy) + time_to_echo
-    min_te = round_to_raster(min_te, system.grad_raster_time)
+    min_te = round_to_raster(min_te, system.block_duration_raster)
 
     # calculate minimum repetition time (TR)
     min_tr = (
@@ -165,13 +165,13 @@ def t1_t2_spiral_cmrf_kernel(
     )
 
     # ensure minimum TR is on gradient raster
-    min_tr = round_to_raster(min_tr, system.grad_raster_time)
+    min_tr = round_to_raster(min_tr, system.block_duration_raster)
 
     # calculate TR delay
     if tr is None:
         tr_delay = minimum_time_to_set_label
     else:
-        tr_delay = round_to_raster((tr - min_tr + minimum_time_to_set_label), system.grad_raster_time)
+        tr_delay = round_to_raster((tr - min_tr + minimum_time_to_set_label), system.block_duration_raster)
         if not tr_delay >= 0:
             raise ValueError(f'TR must be larger than {min_tr * 1000:.3f} ms. Current value is {tr * 1000:.3f} ms.')
 
@@ -393,7 +393,7 @@ def main(
         t2_prep_echo_times = np.array([0.03, 0.05, 0.1])  # [s]
 
     # define T1prep settings
-    rf_inv_duration = 10.24e-3  # duration of adiabatic inversion pulse [s]
+    rf_inv_duration = 12e-3  # duration of adiabatic inversion pulse [s]
     rf_inv_spoil_risetime = 0.6e-3  # rise time of spoiler after inversion pulse [s]
     rf_inv_spoil_flattime = 8.4e-3  # flat time of spoiler after inversion pulse [s]
     rf_inv_mu = 4.9  # constant determining amplitude of frequency sweep of adiabatic inversion pulse
