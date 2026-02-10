@@ -301,15 +301,7 @@ def t1_t2_spiral_cmrf_kernel(
             seq.add_block(gzr_n)
 
             # add readout gradients and ADC
-            seq.add_block(gx[spiral_idx], gy[spiral_idx], adc)
-            seq.add_block(
-                pp.make_delay(
-                    round_to_raster(
-                        max_spiral_duration - pp.calc_duration(gx[spiral_idx], gy[spiral_idx]),
-                        system.block_duration_raster,
-                    )
-                )
-            )
+            seq.add_block(gx[spiral_idx], gy[spiral_idx], adc, pp.make_delay(max_spiral_duration))
 
             # add spoiler
             seq.add_block(gz_spoil)
