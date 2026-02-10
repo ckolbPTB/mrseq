@@ -221,7 +221,6 @@ def spiral_flash_kernel(
                 labels = []
                 labels.append(pp.make_label(label='LIN', type='SET', value=spiral_))
                 labels.append(pp.make_label(label='SLC', type='SET', value=slice_))
-                seq.add_block(gx[spiral_], gy[spiral_], adc, *labels)
                 seq.add_block(gx[spiral_], gy[spiral_], adc, pp.make_delay(max_spiral_duration), *labels)
             else:
                 seq.add_block(pp.make_delay(max_spiral_duration))
