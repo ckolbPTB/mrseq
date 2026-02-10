@@ -125,7 +125,7 @@ def wasabi_gre_centric_kernel(
     gx = pp.make_trapezoid(
         channel='x',
         flat_area=n_readout_with_oversampling * delta_k,
-        flat_time=adc_dwell_time * n_readout,
+        flat_time=n_readout_with_oversampling * adc_dwell_time,
         system=system,
     )
     n_readout_with_oversampling = n_readout_with_oversampling + np.mod(n_readout_with_oversampling, 2)  # make even
