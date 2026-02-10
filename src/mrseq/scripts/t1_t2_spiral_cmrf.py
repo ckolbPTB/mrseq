@@ -265,6 +265,7 @@ def t1_t2_spiral_cmrf_kernel(
         else:
             # get echo time for current block
             echo_time = t2_prep_echo_times[block % 5 - 2]
+            echo_time = t2_prep_echo_times[0]
 
             # get prep block duration and calculate corresponding trigger delay
             t2prep_block, prep_dur = add_t2_prep(echo_time=echo_time, system=system)
@@ -281,8 +282,8 @@ def t1_t2_spiral_cmrf_kernel(
                 seq.add_block(trig_soft_delay)
 
             # add all events of T2prep block
-            # for idx in t2prep_block.block_events:
-            #    seq.add_block(t2prep_block.get_block(idx)), pp.make_label(type='SET', label='TRID', value=80+idx)
+            for idx in t2prep_block.block_events:
+                seq.add_block(t2prep_block.get_block(idx))
 
         # loop over shots / repetitions per block
         for _ in range(n_shots_per_block):

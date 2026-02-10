@@ -50,7 +50,7 @@ def add_composite_refocusing_block(
     time_start = sum(seq.block_durations.values())
 
     # add RF pulses to sequence
-    for idx, (fa, phase, dur) in enumerate(zip(flip_angles, phases, durations, strict=True)):
+    for fa, phase, dur in zip(flip_angles, phases, durations, strict=True):
         rf = pp.make_block_pulse(
             flip_angle=fa * np.pi / 180,
             delay=system.rf_dead_time,
@@ -59,10 +59,7 @@ def add_composite_refocusing_block(
             system=system,
             use='preparation',
         )
-        if idx == 0:
-            seq.add_block(rf, pp.make_label(type='SET', label='TRID', value=72))
-        else:
-            seq.add_block(rf)
+        seq.add_block(rf)
 
     # calculate total block duration
     block_duration = sum(seq.block_durations.values()) - time_start
@@ -159,7 +156,7 @@ def add_t2_prep(
     )
 
     # add 90°x pulse to sequence
-    seq.add_block(rf_90)
+    seq.add_block(rf_90, pp.make_label(type='SET', label='TRID', value=1080))
 
     # Calculate delay before 1st MLEV-4 refocusing pulse.
     # We have to calculate it manually because we need it before we add the 1st refocusing block to the sequence.
