@@ -505,7 +505,7 @@ def spiral_acquisition(
             gy_pre[i].delay = max_pre_duration - gy_pre[i].shape_dur
             gx_pre[i].delay = max_pre_duration - gx_pre[i].shape_dur
     else:
-        max_pre_duration = 0.0
+        max_pre_duration = adc.delay
 
     def combine_gradients(*grad_objects, channel):
         grad_list = [grad for grad in grad_objects if grad is not None]  # Remove None
