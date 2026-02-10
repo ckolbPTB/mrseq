@@ -217,7 +217,7 @@ def t1_t2_spiral_cmrf_kernel(
     seq.add_block(
         pp.make_delay(minimum_time_to_set_label),
         pp.make_label(label='LIN', type='SET', value=0),
-        pp.make_label(type='SET', label='TRID', value=33),
+        pp.make_label(type='SET', label='TRID', value=1033),
     )
 
     # initialize repetition counter
@@ -240,7 +240,7 @@ def t1_t2_spiral_cmrf_kernel(
             # add trigger and constant part of trigger delay
             seq.add_block(
                 pp.make_trigger(channel='physio1', duration=constant_trig_delay),
-                pp.make_label(type='SET', label='TRID', value=44),
+                pp.make_label(type='SET', label='TRID', value=1044),
             )
 
             # add variable part of trigger delay (soft delay)
@@ -256,7 +256,7 @@ def t1_t2_spiral_cmrf_kernel(
             # add trigger and trigger delay(s)
             seq.add_block(
                 pp.make_trigger(channel='physio1', duration=min_cardiac_trigger_delay),
-                pp.make_label(type='SET', label='TRID', value=44),
+                pp.make_label(type='SET', label='TRID', value=1044),
             )
             if use_soft_delay:
                 seq.add_block(trig_soft_delay)
@@ -273,7 +273,7 @@ def t1_t2_spiral_cmrf_kernel(
             # add trigger and constant part of trigger delay
             seq.add_block(
                 pp.make_trigger(channel='physio1', duration=constant_trig_delay),
-                pp.make_label(type='SET', label='TRID', value=44),
+                pp.make_label(type='SET', label='TRID', value=1044),
             )
 
             # add variable part of trigger delay (soft delay)
@@ -310,21 +310,13 @@ def t1_t2_spiral_cmrf_kernel(
             )
 
             # add slice selective excitation pulse
-            seq.add_block(rf_n, gz_n, pp.make_label(type='SET', label='TRID', value=1))
+            seq.add_block(rf_n, gz_n, pp.make_label(type='SET', label='TRID', value=int(1 + spiral_idx)))
 
             # add slice selection re-phasing gradient
             seq.add_block(gzr_n)
 
             # add readout gradients and ADC
-            seq.add_block(gx[spiral_idx], gy[spiral_idx], adc)
-            seq.add_block(
-                pp.make_delay(
-                    round_to_raster(
-                        max_spiral_duration - pp.calc_duration(gx[spiral_idx], gy[spiral_idx]),
-                        system.block_duration_raster,
-                    )
-                )
-            )
+            seq.add_block(gx[spiral_idx], gy[spiral_idx], adc, pp.make_delay(max_spiral_duration))
 
             # add spoiler
             seq.add_block(gz_spoil)
@@ -353,7 +345,7 @@ def t1_t2_spiral_cmrf_kernel(
         pp.make_delay(0.1),
         pp.make_label(label='LIN', type='SET', value=0),
         pp.make_label(label='SLC', type='SET', value=0),
-        pp.make_label(type='SET', label='TRID', value=99),
+        pp.make_label(type='SET', label='TRID', value=1099),
     )
     seq.add_block(adc, pp.make_label(label='NOISE', type='SET', value=True))
     seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))

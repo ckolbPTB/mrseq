@@ -66,7 +66,7 @@ def add_t1_inv_prep(
         system=system,
         use='inversion',
     )
-    seq.add_block(rf, pp.make_label(type='SET', label='TRID', value=70))
+    seq.add_block(rf, pp.make_label(type='SET', label='TRID', value=1070))
 
     # Add spoiler gradient if requested
     if add_spoiler:
