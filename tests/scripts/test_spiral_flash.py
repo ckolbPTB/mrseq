@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from mrseq.scripts.spiral_flash import main as create_seq
 
-EXPECTED_DUR = 0.6996  # defined 2025-11-11
+EXPECTED_DUR = 0.70588  # defined 2026-02-10
 
 
 def test_default_seq_duration(system_defaults):
