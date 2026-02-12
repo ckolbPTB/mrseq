@@ -159,6 +159,15 @@ def t1_molli_bssfp_kernel(
         sampling_order='low_high',
     )
 
+    # phase encoding gradient for max ky position, reduce slew rate because all three gradients are on at the same time
+    gy_pre_max = pp.make_trapezoid(
+        channel='y',
+        area=delta_k * n_readout / 2,
+        duration=gx_pre_duration,
+        system=system,
+        max_slew=system.max_slew * 0.8,
+    )
+
     # calculate minimum echo time
     if te is None:
         gzr_gx_dur = pp.calc_duration(gzr, gx_pre)  # gzr and gx_pre are applied simultaneously
@@ -291,53 +300,43 @@ def t1_molli_bssfp_kernel(
                     seq.add_block(trig_soft_delay)
 
             rf_signal = rf.signal.copy()
-            for pe_index in range(-n_bssfp_startup_pulses, len(pe_steps)):
+            for idx in range(-n_bssfp_startup_pulses, len(pe_steps)):
+                pe_index_ = pe_steps[idx if idx >= 0 else 0]
+
                 # add slice selective excitation pulse
-                if pe_index < 0:
+                if idx < 0:
                     # use linear flip angle ramp for bSSFP startup pulses
-                    rf.signal = rf_signal * 1 / n_bssfp_startup_pulses * (n_bssfp_startup_pulses + pe_index + 1)
+                    rf.signal = rf_signal * 1 / n_bssfp_startup_pulses * (n_bssfp_startup_pulses + idx + 1)
                 else:
                     rf.signal = rf_signal
-                if np.mod(pe_index, 2) == 0:
+                if np.mod(idx, 2) == 0:
                     rf.phase_offset = -np.pi
                     adc.phase_offset = -np.pi
                 else:
                     rf.phase_offset = 0.0
                     adc.phase_offset = 0.0
-                seq.add_block(rf, gz, pp.make_label(type='SET', label='TRID', value=4 if pe_index < 0 else 3))
+                seq.add_block(rf, gz, pp.make_label(type='SET', label='TRID', value=88 if idx < 0 else 1))
 
-                # set labels for the next spoke
+                # set labels
                 labels = []
-                labels.append(pp.make_label(label='LIN', type='SET', value=int(pe_steps[pe_index] - np.min(pe_steps))))
-                labels.append(
-                    pp.make_label(label='IMA', type='SET', value=pe_steps[pe_index] in pe_fully_sampled_center)
-                )
-                labels.append(pp.make_label(type='SET', label='ECO', value=int(contrast_index)))
-
-                # current phase encoding gradient, reduce slew rate because all three gradients are on at the same time
-                gy_pre = pp.make_trapezoid(
-                    channel='y',
-                    area=delta_k * pe_steps[pe_index if pe_index >= 0 else 0],
-                    duration=gx_pre_duration,
-                    system=system,
-                    max_slew=system.max_slew * 0.8,
-                )
+                labels.append(pp.make_label(label='LIN', type='SET', value=int(pe_steps[idx] - np.min(pe_steps))))
+                labels.append(pp.make_label(label='IMA', type='SET', value=pe_steps[idx] in pe_fully_sampled_center))
+                labels.append(pp.make_label(label='ECO', type='SET', value=int(contrast_index)))
 
                 if te is not None:
                     seq.add_block(gzr)
                     seq.add_block(pp.make_delay(te_delay))
-                    seq.add_block(gx_pre, gy_pre, *labels)
+                    seq.add_block(gx_pre, pp.scale_grad(gy_pre_max, pe_index_ / (n_readout / 2)))
                 else:
-                    seq.add_block(gx_pre, gy_pre, gzr, *labels)
+                    seq.add_block(gx_pre, pp.scale_grad(gy_pre_max, pe_index_ / (n_readout / 2)), gzr)
 
                 # add the readout gradient and ADC
-                if pe_index >= 0:
-                    seq.add_block(gx, adc)
+                if idx >= 0:
+                    seq.add_block(gx, adc, *labels)
                 else:
                     seq.add_block(gx)
 
-                gy_pre.amplitude = -gy_pre.amplitude
-                seq.add_block(gx_post, gy_pre, gzr)
+                seq.add_block(gx_post, pp.scale_grad(gy_pre_max, -pe_index_ / (n_readout / 2)), gzr)
 
                 # add delay in case TR > min_TR
                 if tr_delay > 0:

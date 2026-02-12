@@ -128,11 +128,15 @@ def t2_tse_cartesian_kernel(
         0
     ][0]
 
-    # phase encoding
-    gy_areas = (np.arange(n_phase_encoding) - n_phase_encoding // 2) * delta_k
+    # phase encoding gradient
+    gy_pre_max = pp.make_trapezoid(
+        channel='y', area=delta_k * n_phase_encoding / 2, duration=gx_pre_duration, system=system
+    )
 
-    # phase encoding along slice direction
-    gz_areas = (np.arange(n_slice_encoding) - n_slice_encoding // 2) * 1 / fov_z
+    # slice encoding gradient
+    gz_pre_max = pp.make_trapezoid(
+        channel='z', area=1 / fov_z * n_slice_encoding / 2, duration=gx_pre_duration, system=system
+    )
 
     # create crusher gradients
     gz_crush = pp.make_trapezoid(channel='z', system=system, area=gz_crusher_area, duration=gz_crusher_duration)
@@ -219,23 +223,13 @@ def t2_tse_cartesian_kernel(
         se_label = pp.make_label(type='SET', label='PAR', value=int(se))
 
         # phase encoding along se
-        gz_pre = pp.make_trapezoid(
-            channel='z',
-            area=gz_areas[se] if gz_areas[se] != 0 else np.finfo(np.float32).eps,
-            duration=pp.calc_duration(gx_pre),
-            system=system,
-        )
+        gz_pre = pp.scale_grad(gz_pre_max, (se - n_slice_encoding / 2) / (n_slice_encoding / 2))
 
         for pe in range(n_phase_encoding):
             pe_label = pp.make_label(type='SET', label='LIN', value=int(pe))
 
             # phase encoding along pe
-            gy_pre = pp.make_trapezoid(
-                channel='y',
-                area=gy_areas[pe] if gy_areas[pe] != 0 else np.finfo(np.float32).eps,
-                duration=pp.calc_duration(gx_pre),
-                system=system,
-            )
+            gy_pre = pp.scale_grad(gy_pre_max, (pe - n_phase_encoding / 2) / (n_phase_encoding / 2))
 
             _start_time_tr_block = sum(seq.block_durations.values())
 

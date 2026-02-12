@@ -121,6 +121,10 @@ def t2_t2prep_flash_kernel(
         return_gz=True,
         use='excitation',
     )
+    # reduce slew rate of gz-rewinder which overlaps with readout pre-winder
+    gzr = pp.make_trapezoid(
+        channel='z', area=gzr.area, duration=gx_pre_duration, max_slew=system.max_slew * 0.4, system=system
+    )
 
     # create readout gradient and ADC
     delta_k = 1 / fov_xy
@@ -129,9 +133,21 @@ def t2_t2prep_flash_kernel(
     n_readout_with_oversampling = n_readout_with_oversampling + np.mod(n_readout_with_oversampling, 2)  # make even
     adc = pp.make_adc(num_samples=n_readout_with_oversampling, duration=gx.flat_time, delay=gx.rise_time, system=system)
 
-    # create frequency encoding pre- and re-winder gradient
-    gx_pre = pp.make_trapezoid(channel='x', area=-gx.area / 2 - delta_k / 2, duration=gx_pre_duration, system=system)
-    gx_post = pp.make_trapezoid(channel='x', area=-gx.area / 2 + delta_k / 2, duration=gx_pre_duration, system=system)
+    # create readout pre- and re-winder gradient, reduce slew rate because all three gradients are used at the same time
+    gx_pre = pp.make_trapezoid(
+        channel='x',
+        area=-gx.area / 2 - delta_k / 2,
+        duration=gx_pre_duration,
+        system=system,
+        max_slew=system.max_slew * 0.8,
+    )
+    gx_post = pp.make_trapezoid(
+        channel='x',
+        area=-gx.area / 2 + delta_k / 2,
+        duration=gx_pre_duration,
+        system=system,
+        max_slew=system.max_slew * 0.8,
+    )
     k0_center_id = np.where((np.arange(n_readout_with_oversampling) - n_readout_with_oversampling / 2) * delta_k == 0)[
         0
     ][0]
@@ -148,6 +164,14 @@ def t2_t2prep_flash_kernel(
     if n_pe_points_per_cardiac_cycle is None:
         n_pe_points_per_cardiac_cycle = len(pe_steps)
 
+    # phase encoding gradient for max ky position, reduce slew rate because all three gradients are on at the same time
+    gy_pre_max = pp.make_trapezoid(
+        channel='y',
+        area=delta_k * n_readout / 2,
+        duration=gx_pre_duration,
+        system=system,
+        max_slew=system.max_slew * 0.8,
+    )
     # create spoiler gradients
     gz_spoil = pp.make_trapezoid(channel='z', system=system, area=gz_spoil_area, duration=gz_spoil_duration)
 
@@ -212,12 +236,6 @@ def t2_t2prep_flash_kernel(
             default_duration=0.8 - min_cardiac_trigger_delay,
         )
 
-    # obtain noise samples
-    seq.add_block(pp.make_label(label='LIN', type='SET', value=0), pp.make_label(label='SLC', type='SET', value=0))
-    seq.add_block(adc, pp.make_label(label='NOISE', type='SET', value=True))
-    seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))
-    seq.add_block(pp.make_delay(system.rf_dead_time))
-
     n_cycles_per_image = len(pe_steps) // n_pe_points_per_cardiac_cycle
     for t2_idx, t2_prep_echo_time in enumerate(t2_prep_echo_times):
         for cardiac_cycle_idx in range(n_cycles_per_image):
@@ -231,7 +249,10 @@ def t2_t2prep_flash_kernel(
                     raise ValueError('Minimum trigger delay is too short for the selected T2prep timings.')
 
                 # add trigger and constant part of trigger delay
-                seq.add_block(pp.make_trigger(channel='physio1', duration=constant_trig_delay))
+                seq.add_block(
+                    pp.make_trigger(channel='physio1', duration=constant_trig_delay),
+                    pp.make_label(type='SET', label='TRID', value=1044),
+                )
 
                 # add variable part of trigger delay (soft delay)
                 if use_soft_delay:
@@ -249,7 +270,10 @@ def t2_t2prep_flash_kernel(
                     raise ValueError('Minimum trigger delay is too short for the current echo time.')
 
                 # add trigger and constant part of trigger delay
-                seq.add_block(pp.make_trigger(channel='physio1', duration=constant_trig_delay))
+                seq.add_block(
+                    pp.make_trigger(channel='physio1', duration=constant_trig_delay),
+                    pp.make_label(type='SET', label='TRID', value=1044),
+                )
 
                 # add variable part of trigger delay (soft delay)
                 if use_soft_delay:
@@ -263,7 +287,7 @@ def t2_t2prep_flash_kernel(
                     adc.phase_offset = rf_phase / 180 * np.pi
 
                 # add slice selective excitation pulse
-                seq.add_block(rf, gz)
+                seq.add_block(rf, gz, pp.make_label(type='SET', label='TRID', value=9))
 
                 # update rf phase offset for the next excitation pulse
                 rf_inc = divmod(rf_inc + rf_spoiling_phase_increment, 360.0)[1]
@@ -275,23 +299,17 @@ def t2_t2prep_flash_kernel(
                 labels.append(pp.make_label(label='IMA', type='SET', value=pe_index_ in pe_fully_sampled_center))
                 labels.append(pp.make_label(type='SET', label='ECO', value=int(t2_idx)))
 
-                # calculate current phase encoding gradient
-                gy_pre = pp.make_trapezoid(
-                    channel='y', area=delta_k * pe_index_, duration=gx_pre_duration, system=system
-                )
-
                 if te is not None:
                     seq.add_block(gzr)
                     seq.add_block(pp.make_delay(te_delay))
-                    seq.add_block(gx_pre, gy_pre, *labels)
+                    seq.add_block(gx_pre, pp.scale_grad(gy_pre_max, pe_index_ / (n_readout / 2)), *labels)
                 else:
-                    seq.add_block(gx_pre, gy_pre, gzr, *labels)
+                    seq.add_block(gx_pre, pp.scale_grad(gy_pre_max, pe_index_ / (n_readout / 2)), gzr, *labels)
 
                 # add the readout gradient and ADC
                 seq.add_block(gx, adc)
 
-                gy_pre.amplitude = -gy_pre.amplitude
-                seq.add_block(gx_post, gy_pre, gz_spoil)
+                seq.add_block(gx_post, pp.scale_grad(gy_pre_max, -pe_index_ / (n_readout / 2)), gz_spoil)
 
                 # add delay in case TR > min_TR
                 if tr_delay > 0:
@@ -301,11 +319,25 @@ def t2_t2prep_flash_kernel(
                 # add delay for magnetization recovery
                 for _ in range(n_recovery_cardiac_cycles):
                     # add trigger and constant part of trigger delay
-                    seq.add_block(pp.make_trigger(channel='physio1', duration=min_cardiac_trigger_delay))
+                    seq.add_block(
+                        pp.make_trigger(channel='physio1', duration=min_cardiac_trigger_delay),
+                        pp.make_label(type='SET', label='TRID', value=1044),
+                    )
 
                     # add variable part of trigger delay (soft delay)
                     if use_soft_delay:
                         seq.add_block(trig_soft_delay)
+
+    # obtain noise samples
+    seq.add_block(
+        pp.make_delay(0.1),
+        pp.make_label(label='LIN', type='SET', value=0),
+        pp.make_label(label='SLC', type='SET', value=0),
+        pp.make_label(type='SET', label='TRID', value=1099),
+    )
+    seq.add_block(adc, pp.make_label(label='NOISE', type='SET', value=True))
+    seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))
+    seq.add_block(pp.make_delay(system.rf_dead_time))
 
     return seq, min_te, min_tr
 
