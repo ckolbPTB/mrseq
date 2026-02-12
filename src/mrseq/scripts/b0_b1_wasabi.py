@@ -224,6 +224,7 @@ def wasabi_gre_centric_kernel(
     seq.set_definition('TE', min_te)
     seq.set_definition('TR', min_tr)
     seq.set_definition('frequency_offsets', frequency_offsets.tolist())
+    seq.set_definition('ReadoutOversamplingFactor', readout_oversampling)
 
     return seq
 
