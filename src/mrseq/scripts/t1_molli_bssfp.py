@@ -120,7 +120,7 @@ def t1_molli_bssfp_kernel(
     )
     # reduce slew rate of gz-rewinder which overlaps with readout pre-winder
     gzr = pp.make_trapezoid(
-        channel='z', area=gzr.area, duration=gx_pre_duration, max_slew=system.max_slew * 0.4, system=system
+        channel='z', area=gzr.area, duration=gx_pre_duration, max_slew=system.max_slew * 0.2, system=system
     )
 
     # create readout gradient and ADC
@@ -132,20 +132,21 @@ def t1_molli_bssfp_kernel(
 
     print(f'Current receiver bandwidth = {1 / gx.flat_time:.0f} Hz/pixel')
 
-    # create frequency encoding pre- and re-winder gradient, reduce slew rate because all three gradients are used at the same time
+    # create frequency encoding pre- and re-winder gradient
+    # reduce slew rate because all three gradients are used at the same time
     gx_pre = pp.make_trapezoid(
         channel='x',
         area=-gx.area / 2 - delta_k / 2,
         duration=gx_pre_duration,
         system=system,
-        max_slew=system.max_slew * 0.8,
+        max_slew=system.max_slew * 0.7,
     )
     gx_post = pp.make_trapezoid(
         channel='x',
         area=-gx.area / 2 + delta_k / 2,
         duration=gx_pre_duration,
         system=system,
-        max_slew=system.max_slew * 0.8,
+        max_slew=system.max_slew * 0.7,
     )
     k0_center_id = np.where((np.arange(n_readout_with_oversampling) - n_readout_with_oversampling / 2) * delta_k == 0)[
         0
@@ -165,7 +166,7 @@ def t1_molli_bssfp_kernel(
         area=delta_k * n_readout / 2,
         duration=gx_pre_duration,
         system=system,
-        max_slew=system.max_slew * 0.8,
+        max_slew=system.max_slew * 0.7,
     )
 
     # calculate minimum echo time
