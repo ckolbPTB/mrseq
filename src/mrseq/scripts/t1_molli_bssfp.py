@@ -437,7 +437,7 @@ def main(
         inversion_times = np.asarray([0.1, 0.18])
 
     # define T1prep settings
-    rf_inv_duration = 10.24e-3  # duration of adiabatic inversion pulse [s]
+    rf_inv_duration = 12e-3  # duration of adiabatic inversion pulse [s]
     rf_inv_spoil_risetime = 0.6e-3  # rise time of spoiler after inversion pulse [s]
     rf_inv_spoil_flattime = 8.4e-3  # flat time of spoiler after inversion pulse [s]
     rf_inv_mu = 4.9  # constant determining amplitude of frequency sweep of adiabatic inversion pulse

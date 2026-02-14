@@ -250,7 +250,7 @@ def radial_flash_kernel(
                 labels.append(pp.make_label(label='SLC', type='SET', value=slice_))
                 seq.add_block(*pp.rotate(gx, adc, angle=rotation_angle_rad, axis='z'), *labels)
             else:
-                seq.add_block(pp.make_delay(pp.calc_duration(gx, adc)))
+                seq.add_block(gx, pp.make_delay(pp.calc_duration(adc)))
 
             seq.add_block(*pp.rotate(gx_post, gz_spoil, angle=rotation_angle_rad, axis='z'))
 
