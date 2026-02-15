@@ -37,6 +37,7 @@ def t2_t2prep_flash_kernel(
     rf_spoiling_phase_increment: float,
     gz_spoil_duration: float,
     gz_spoil_area: float,
+    ge_segment_delay: float,
 ) -> tuple[pp.Sequence, float, float]:
     """Generate a FLASH sequence with T2-preparation pulses.
 
@@ -92,6 +93,8 @@ def t2_t2prep_flash_kernel(
         Duration of spoiler gradient (in seconds).
     gz_spoil_area
         Area of spoiler gradient (in 1/meters = Hz/m * s).
+    ge_segment_delay
+        Delay time at the end of each segment for GE scanners.
 
     Returns
     -------
@@ -208,7 +211,7 @@ def t2_t2prep_flash_kernel(
     )
 
     # calculate repetition time delay (tr_delay)
-    current_min_tr = min_tr + te_delay
+    current_min_tr = min_tr + te_delay + ge_segment_delay
     if tr is None:
         tr_delay = 0.0
     else:
@@ -243,14 +246,15 @@ def t2_t2prep_flash_kernel(
                 # get prep block duration and calculate corresponding trigger delay
                 t2prep_block, prep_dur = add_t2_prep(echo_time=t2_prep_echo_time, system=system)
                 constant_trig_delay = round_to_raster(
-                    min_cardiac_trigger_delay - prep_dur - current_te / 2, raster_time=system.block_duration_raster
+                    min_cardiac_trigger_delay - prep_dur - current_te / 2 - ge_segment_delay,
+                    raster_time=system.block_duration_raster,
                 )
                 if constant_trig_delay < 0:
                     raise ValueError('Minimum trigger delay is too short for the selected T2prep timings.')
 
                 # add trigger and constant part of trigger delay
                 seq.add_block(
-                    pp.make_trigger(channel='physio1', duration=constant_trig_delay),
+                    pp.make_trigger(channel='physio1', duration=constant_trig_delay - ge_segment_delay),
                     pp.make_label(type='SET', label='TRID', value=1044),
                 )
 
@@ -271,7 +275,7 @@ def t2_t2prep_flash_kernel(
 
                 # add trigger and constant part of trigger delay
                 seq.add_block(
-                    pp.make_trigger(channel='physio1', duration=constant_trig_delay),
+                    pp.make_trigger(channel='physio1', duration=constant_trig_delay - ge_segment_delay),
                     pp.make_label(type='SET', label='TRID', value=1044),
                 )
 
@@ -313,7 +317,7 @@ def t2_t2prep_flash_kernel(
 
                 # add delay in case TR > min_TR
                 if tr_delay > 0:
-                    seq.add_block(pp.make_delay(tr_delay))
+                    seq.add_block(pp.make_delay(tr_delay - ge_segment_delay))
 
             if (t2_idx < len(t2_prep_echo_times) - 1) or (cardiac_cycle_idx < n_cycles_per_image - 1):
                 # add delay for magnetization recovery
@@ -463,6 +467,7 @@ def main(
         rf_spoiling_phase_increment=rf_spoiling_phase_increment,
         gz_spoil_duration=gz_spoil_duration,
         gz_spoil_area=gz_spoil_area,
+        ge_segment_delay=0.0,
     )
 
     # check timing of the sequence

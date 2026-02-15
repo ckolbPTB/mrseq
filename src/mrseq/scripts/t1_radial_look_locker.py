@@ -1,27 +1,33 @@
-"""3D Cartesian FLASH sequence."""
+"""2D radial Look Locker sequence."""
 
 from pathlib import Path
 
+import ismrmrd
 import numpy as np
 import pypulseq as pp
 
+from mrseq.preparations import add_t1_inv_prep
 from mrseq.utils import find_gx_flat_time_on_adc_raster
 from mrseq.utils import round_to_raster
 from mrseq.utils import sys_defaults
 from mrseq.utils import write_sequence
+from mrseq.utils.constants import GOLDEN_ANGLE_HALF_CIRCLE
+from mrseq.utils.ismrmrd import Fov
+from mrseq.utils.ismrmrd import Limits
+from mrseq.utils.ismrmrd import MatrixSize
+from mrseq.utils.ismrmrd import create_header
 
 
-def cartesian_flash_kernel(
+def t1_radial_look_locker_kernel(
     system: pp.Opts,
     te: float | None,
     tr: float | None,
     fov_xy: float,
-    fov_z: float,
     n_readout: int,
-    readout_oversampling: int,
-    n_phase_encoding: int,
-    n_slice_encoding: int,
-    n_dummy_excitations: int,
+    n_spokes: int,
+    spoke_angle: float,
+    readout_oversampling: float,
+    slice_thickness: float,
     gx_pre_duration: float,
     gx_flat_time: float,
     rf_duration: float,
@@ -31,9 +37,14 @@ def cartesian_flash_kernel(
     rf_spoiling_phase_increment: float,
     gz_spoil_duration: float,
     gz_spoil_area: float,
+    rf_inv_duration: float,
+    rf_inv_spoil_risetime: float,
+    rf_inv_spoil_flattime: float,
+    rf_inv_mu: float,
     ge_segment_delay: float,
-) -> tuple[pp.Sequence, float, float]:
-    """Generate a 3D Cartesian FLASH sequence.
+    mrd_header_file: str | Path | None,
+) -> tuple[pp.Sequence, float, float, float]:
+    """Generate a radial Look Locker sequence for T1 mapping.
 
     Parameters
     ----------
@@ -45,18 +56,16 @@ def cartesian_flash_kernel(
         Desired repetition time (TR) (in seconds).
     fov_xy
         Field of view in x and y direction (in meters).
-    fov_z
-        Field of view in the z direction (slice thickness) in meters.
     n_readout
         Number of frequency encoding steps.
+    n_spokes
+        Number of radial spokes.
+    spoke_angle
+        Angle between successive radial spokes (in radian).
     readout_oversampling
         Readout oversampling factor, commonly 2. This reduces aliasing artifacts.
-    n_phase_encoding
-        Number of phase encoding steps.
-    n_slice_encoding
-        Number of slice encoding steps.
-    n_dummy_excitations
-        Number of dummy excitations before data acquisition to ensure steady state.
+    slice_thickness
+        Slice thickness of the 2D slice (in meters).
     gx_pre_duration
         Duration of readout pre-winder gradient (in seconds)
     gx_flat_time
@@ -75,8 +84,18 @@ def cartesian_flash_kernel(
         Duration of spoiler gradient (in seconds)
     gz_spoil_area
         Area of spoiler gradient (in mT/m * s)
+    rf_inv_duration
+        Duration of adiabatic inversion pulse (in seconds)
+    rf_inv_spoil_risetime
+        Rise time of spoiler after inversion pulse (in seconds)
+    rf_inv_spoil_flattime
+        Flat time of spoiler after inversion pulse (in seconds)
+    rf_inv_mu
+        Constant determining amplitude of frequency sweep of adiabatic inversion pulse
     ge_segment_delay
         Delay time at the end of each segment for GE scanners.
+    mrd_header_file
+        Filename of the ISMRMRD header file to be created. If None, no header file is created.
 
     Returns
     -------
@@ -86,13 +105,12 @@ def cartesian_flash_kernel(
         Shortest possible echo time.
     min_tr
         Shortest possible repetition time.
+    inversion_time
+        Time between inversion and first radial line
 
     """
     if readout_oversampling < 1:
         raise ValueError('Readout oversampling factor must be >= 1.')
-
-    if n_dummy_excitations < 0:
-        raise ValueError('Number of dummy excitations must be >= 0.')
 
     # create PyPulseq Sequence object and set system limits
     seq = pp.Sequence(system=system)
@@ -101,7 +119,7 @@ def cartesian_flash_kernel(
     rf, gz, gzr = pp.make_sinc_pulse(
         flip_angle=rf_flip_angle / 180 * np.pi,
         duration=rf_duration,
-        slice_thickness=fov_z,
+        slice_thickness=slice_thickness,
         apodization=rf_apodization,
         time_bw_product=rf_bwt,
         delay=system.rf_dead_time,
@@ -111,9 +129,11 @@ def cartesian_flash_kernel(
     )
 
     # create readout gradient and ADC
-    delta_k = 1 / fov_xy
-    gx = pp.make_trapezoid(channel='x', flat_area=n_readout * delta_k, flat_time=gx_flat_time, system=system)
+    delta_k = 1 / (fov_xy * readout_oversampling)
     n_readout_with_oversampling = int(n_readout * readout_oversampling)
+    gx = pp.make_trapezoid(
+        channel='x', flat_area=n_readout_with_oversampling * delta_k, flat_time=gx_flat_time, system=system
+    )
     n_readout_with_oversampling = n_readout_with_oversampling + np.mod(n_readout_with_oversampling, 2)  # make even
     adc = pp.make_adc(num_samples=n_readout_with_oversampling, duration=gx.flat_time, delay=gx.rise_time, system=system)
 
@@ -123,28 +143,15 @@ def cartesian_flash_kernel(
     k0_center_id = np.where((np.arange(n_readout_with_oversampling) - n_readout_with_oversampling / 2) * delta_k == 0)[
         0
     ][0]
-    # create frequency encoding pre- and re-winder gradient
-    gx_pre = pp.make_trapezoid(channel='x', area=-gx.area / 2 - delta_k / 2, duration=gx_pre_duration, system=system)
-    gx_post = pp.make_trapezoid(channel='x', area=-gx.area / 2 + delta_k / 2, duration=gx_pre_duration, system=system)
-    k0_center_id = np.where((np.arange(n_readout_with_oversampling) - n_readout_with_oversampling / 2) * delta_k == 0)[
-        0
-    ][0]
-
-    # phase encoding gradient
-    gy_pre_max = pp.make_trapezoid(
-        channel='y', area=delta_k * n_phase_encoding / 2, duration=gx_pre_duration, system=system
-    )
-
-    # slice encoding gradient
-    gz_pre_max = pp.make_trapezoid(
-        channel='z', area=1 / fov_z * n_slice_encoding / 2, duration=gx_pre_duration, system=system
-    )
 
     # create spoiler gradients
     gz_spoil = pp.make_trapezoid(channel='z', system=system, area=gz_spoil_area, duration=gz_spoil_duration)
 
     # calculate minimum echo time
-    gzr_gx_dur = pp.calc_duration(gzr) + pp.calc_duration(gx_pre)  # gzr and gx_pre are applied sequentially
+    if te is None:
+        gzr_gx_dur = pp.calc_duration(gzr, gx_pre)  # gzr and gx_pre are applied simultaneously
+    else:
+        gzr_gx_dur = pp.calc_duration(gzr) + pp.calc_duration(gx_pre)  # gzr and gx_pre are applied sequentially
 
     min_te = (
         rf.shape_dur / 2  # time from center to end of RF pulse
@@ -189,48 +196,83 @@ def cartesian_flash_kernel(
     rf_phase = 0.0
     rf_inc = 0.0
 
-    for se in range(n_slice_encoding):
-        n_dummy = n_dummy_excitations if se == 0 else 0
+    # create header
+    if mrd_header_file:
+        hdr = create_header(
+            traj_type='other',
+            encoding_fov=Fov(x=fov_xy * readout_oversampling, y=fov_xy, z=slice_thickness),
+            recon_fov=Fov(x=fov_xy, y=fov_xy, z=slice_thickness),
+            encoding_matrix=MatrixSize(n_x=n_readout_with_oversampling, n_y=n_readout_with_oversampling, n_z=1),
+            recon_matrix=MatrixSize(n_x=n_readout, n_y=n_readout, n_z=1),
+            dwell_time=adc.dwell,
+            k1_limits=Limits(min=0, max=n_spokes, center=0),
+            h1_resonance_freq=system.gamma * system.B0,
+        )
 
-        for pe in range(-n_dummy, n_phase_encoding):
-            # phase encoding along se and pe
-            if pe >= 0:
-                gz_pre = pp.scale_grad(gz_pre_max, (se - n_slice_encoding / 2) / (n_slice_encoding / 2))
-                se_label = pp.make_label(type='SET', label='PAR', value=int(se))
-                gy_pre = pp.scale_grad(gy_pre_max, (pe - n_phase_encoding / 2) / (n_phase_encoding / 2))
-                pe_label = pp.make_label(type='SET', label='LIN', value=int(pe))
-            else:
-                gz_pre = pp.scale_grad(gz_pre_max, 0)
-                se_label = pp.make_label(type='SET', label='PAR', value=0)
-                gy_pre = pp.scale_grad(gy_pre_max, 0)
-                pe_label = pp.make_label(type='SET', label='LIN', value=0)
+        # write header to file
+        prot = ismrmrd.Dataset(mrd_header_file, 'w')
+        prot.write_xml_header(hdr.toXML('utf-8'))
 
-            # calculate current phase_offset if rf_spoiling is activated
-            if rf_spoiling_phase_increment > 0:
-                rf.phase_offset = rf_phase / 180 * np.pi
-                adc.phase_offset = rf_phase / 180 * np.pi
+    # Create inversion pulse
+    seq, _block_duration, time_since_inversion = add_t1_inv_prep(
+        seq=seq,
+        system=system,
+        rf_duration=rf_inv_duration,
+        spoiler_flat_time=rf_inv_spoil_flattime,
+        spoiler_ramp_time=rf_inv_spoil_risetime,
+        rf_mu=rf_inv_mu,
+    )
 
-            # add slice selective excitation pulse
-            seq.add_block(rf, gz, pp.make_label(type='SET', label='TRID', value=1))
+    for spoke_ in range(n_spokes):
+        # calculate current phase_offset if rf_spoiling is activated
+        if rf_spoiling_phase_increment > 0:
+            rf.phase_offset = rf_phase / 180 * np.pi
+            adc.phase_offset = rf_phase / 180 * np.pi
 
-            # update rf phase offset for the next excitation pulse
-            rf_inc = divmod(rf_inc + rf_spoiling_phase_increment, 360.0)[1]
-            rf_phase = divmod(rf_phase + rf_inc, 360.0)[1]
+        # add slice selective excitation pulse
+        seq.add_block(rf, gz, pp.make_label(type='SET', label='TRID', value=1))
 
+        # update rf phase offset for the next excitation pulse
+        rf_inc = divmod(rf_inc + rf_spoiling_phase_increment, 360.0)[1]
+        rf_phase = divmod(rf_phase + rf_inc, 360.0)[1]
+
+        # calculate rotation angle for the current spoke
+        rotation_angle_rad = spoke_angle * spoke_
+
+        if te_delay > 0:
             seq.add_block(gzr)
             seq.add_block(pp.make_delay(te_delay))
-            seq.add_block(gx_pre, gy_pre, gz_pre)
+            seq.add_block(*pp.rotate(gx_pre, angle=rotation_angle_rad, axis='z'))
+        else:
+            seq.add_block(*pp.rotate(gx_pre, gzr, angle=rotation_angle_rad, axis='z'))
 
-            if pe >= 0:
-                seq.add_block(gx, adc, pe_label, se_label)
-            else:
-                seq.add_block(gx, pp.make_delay(pp.calc_duration(adc)))
+        # rotate and add the readout gradient and ADC
+        labels = []
+        labels.append(pp.make_label(label='LIN', type='SET', value=spoke_))
+        seq.add_block(*pp.rotate(gx, adc, angle=rotation_angle_rad, axis='z'), *labels)
 
-            seq.add_block(gx_post, pp.scale_grad(gy_pre, -1), gz_spoil)
+        seq.add_block(*pp.rotate(gx_post, gz_spoil, angle=rotation_angle_rad, axis='z'))
 
-            # add delay in case TR > min_TR
-            if tr_delay > 0:
-                seq.add_block(pp.make_delay(tr_delay - ge_segment_delay))
+        # add delay in case TR > min_TR
+        if tr_delay > 0:
+            seq.add_block(pp.make_delay(tr_delay - ge_segment_delay))
+
+        if mrd_header_file:
+            # add acquisitions to metadata
+            k_radial_line = np.linspace(
+                -n_readout_with_oversampling // 2,
+                (n_readout_with_oversampling // 2) - 1,
+                n_readout_with_oversampling,
+            )
+            radial_trajectory = np.zeros((n_readout_with_oversampling, 2), dtype=np.float32)
+
+            radial_trajectory[:, 0] = k_radial_line * np.cos(rotation_angle_rad)
+            radial_trajectory[:, 1] = k_radial_line * np.sin(rotation_angle_rad)
+
+            acq = ismrmrd.Acquisition()
+            acq.resize(trajectory_dimensions=2, number_of_samples=adc.num_samples)
+            acq.traj[:] = radial_trajectory
+            prot.append_acquisition(acq)
 
     # obtain noise samples
     seq.add_block(
@@ -243,27 +285,39 @@ def cartesian_flash_kernel(
     seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))
     seq.add_block(pp.make_delay(system.rf_dead_time))
 
-    return seq, min_te, min_tr
+    if mrd_header_file:
+        acq = ismrmrd.Acquisition()
+        acq.resize(trajectory_dimensions=2, number_of_samples=adc.num_samples)
+        prot.append_acquisition(acq)
+
+    # close ISMRMRD file
+    if mrd_header_file:
+        prot.close()
+
+    return (
+        seq,
+        min_te,
+        min_tr,
+        time_since_inversion + rf.shape_dur / 2 + gz.rise_time + min_te + te_delay + ge_segment_delay,
+    )
 
 
 def main(
     system: pp.Opts | None = None,
     te: float | None = None,
     tr: float | None = None,
-    rf_flip_angle: float = 12,
+    rf_flip_angle: float = 9,
     fov_xy: float = 128e-3,
-    fov_z: float = 80e-3,
     n_readout: int = 128,
-    n_phase_encoding: int = 128,
-    n_slice_encoding=10,
+    n_spokes: int = 1400,
+    slice_thickness: float = 8e-3,
     receiver_bandwidth_per_pixel: float = 800,  # Hz/pixel
-    n_dummy_excitations: int = 20,
     show_plots: bool = True,
     test_report: bool = True,
     timing_check: bool = True,
     v141_compatibility: bool = True,
 ) -> tuple[pp.Sequence, Path]:
-    """Generate a 3D Cartesian FLASH sequence.
+    """Generate a radial T1 Look Locker sequence for T1 mapping.
 
     Parameters
     ----------
@@ -277,18 +331,14 @@ def main(
         Flip angle of rf excitation pulse (in degrees)
     fov_xy
         Field of view in x and y direction (in meters).
-    fov_z
-        Field of view along z (in meters).
     n_readout
         Number of frequency encoding steps.
-    n_phase_encoding
-        Number of phase encoding steps.
-    n_slice_encoding
-        Number of phase encoding steps along the slice direction.
+    n_spokes
+        Number of radial lines.
+    slice_thickness
+        Slice thickness of the 2D slice (in meters).
     receiver_bandwidth_per_pixel
         Desired receiver bandwidth per pixel (in Hz/pixel). This is used to calculate the readout duration.
-    n_dummy_excitations
-        Number of dummy excitations before data acquisition to ensure steady state.
     show_plots
         Toggles sequence plot.
     test_report
@@ -301,18 +351,25 @@ def main(
     Returns
     -------
     seq
-        Sequence object of 3D Cartesian FLASH sequence.
+        Sequence object of radial FLASH sequence.
     file_path
         Path to the sequence file.
     """
     if system is None:
         system = sys_defaults
 
+    # define T1prep settings
+    rf_inv_duration = 12e-3  # duration of adiabatic inversion pulse [s]
+    rf_inv_spoil_risetime = 0.6e-3  # rise time of spoiler after inversion pulse [s]
+    rf_inv_spoil_flattime = 8.4e-3  # flat time of spoiler after inversion pulse [s]
+    rf_inv_mu = 4.9  # constant determining amplitude of frequency sweep of adiabatic inversion pulse
+
     # define settings of rf excitation pulse
     rf_duration = 1.28e-3  # duration of the rf excitation pulse [s]
     rf_bwt = 4  # bandwidth-time product of rf excitation pulse [Hz*s]
     rf_apodization = 0.5  # apodization factor of rf excitation pulse
     readout_oversampling = 2  # readout oversampling factor, commonly 2. This reduces aliasing artifacts.
+    spoke_angle = GOLDEN_ANGLE_HALF_CIRCLE
 
     # define ADC and gradient timing
     n_readout_with_oversampling = int(n_readout * readout_oversampling)
@@ -324,20 +381,29 @@ def main(
 
     # define spoiling
     gz_spoil_duration = 0.8e-3  # duration of spoiler gradient [s]
-    gz_spoil_area = 4 / (fov_z / n_slice_encoding)  # area / zeroth gradient moment of spoiler gradient
+    gz_spoil_area = 4 / slice_thickness  # area / zeroth gradient moment of spoiler gradient
     rf_spoiling_phase_increment = 117  # RF spoiling phase increment [°]. Set to 0 for no RF spoiling.
 
-    seq, min_te, min_tr = cartesian_flash_kernel(
+    # define sequence filename
+    filename = f'{Path(__file__).stem}_{int(fov_xy * 1000)}fov_{n_readout}nx_{n_spokes}na'
+
+    output_path = Path.cwd() / 'output'
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # delete existing header file
+    if (output_path / Path(filename + '_header.h5')).exists():
+        (output_path / Path(filename + '_header.h5')).unlink()
+
+    seq, min_te, min_tr, ti = t1_radial_look_locker_kernel(
         system=system,
         te=te,
         tr=tr,
         fov_xy=fov_xy,
-        fov_z=fov_z,
         n_readout=n_readout,
+        n_spokes=n_spokes,
+        spoke_angle=spoke_angle,
         readout_oversampling=readout_oversampling,
-        n_phase_encoding=n_phase_encoding,
-        n_slice_encoding=n_slice_encoding,
-        n_dummy_excitations=n_dummy_excitations,
+        slice_thickness=slice_thickness,
         gx_pre_duration=gx_pre_duration,
         gx_flat_time=gx_flat_time,
         rf_duration=rf_duration,
@@ -347,7 +413,12 @@ def main(
         rf_spoiling_phase_increment=rf_spoiling_phase_increment,
         gz_spoil_duration=gz_spoil_duration,
         gz_spoil_area=gz_spoil_area,
+        rf_inv_duration=rf_inv_duration,
+        rf_inv_spoil_risetime=rf_inv_spoil_risetime,
+        rf_inv_spoil_flattime=rf_inv_spoil_flattime,
+        rf_inv_mu=rf_inv_mu,
         ge_segment_delay=0.0,
+        mrd_header_file=output_path / Path(filename + '_header.h5'),
     )
 
     # check timing of the sequence
@@ -364,19 +435,16 @@ def main(
         print('\nCreating advanced test report...')
         print(seq.test_report())
 
-    filename = f'{Path(__file__).stem}_{int(fov_xy * 1000)}fov_xy_{int(fov_z * 1000)}_fov_z_'
-    filename += f'{n_readout}nx_{n_phase_encoding}ny_{n_slice_encoding}nz'
-
     # write all required parameters in the seq-file header/definitions
-    seq.set_definition('FOV', [fov_xy, fov_xy, fov_z])
-    seq.set_definition('ReconMatrix', (n_readout, n_phase_encoding, n_slice_encoding))
+    seq.set_definition('FOV', [fov_xy, fov_xy, slice_thickness])
+    seq.set_definition('ReconMatrix', (n_readout, n_readout, 1))
+    seq.set_definition('SliceThickness', slice_thickness)
     seq.set_definition('TE', te or min_te)
     seq.set_definition('TR', tr or min_tr)
+    seq.set_definition('TI', ti)
     seq.set_definition('ReadoutOversamplingFactor', readout_oversampling)
 
     # save seq-file to disk
-    output_path = Path.cwd() / 'output'
-    output_path.mkdir(parents=True, exist_ok=True)
     print(f"\nSaving sequence file '{filename}.seq' into folder '{output_path}'.")
     write_sequence(seq, str(output_path / filename), create_signature=True, v141_compatibility=v141_compatibility)
 

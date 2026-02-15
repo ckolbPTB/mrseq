@@ -37,6 +37,7 @@ def t1_molli_bssfp_kernel(
     rf_inv_spoil_risetime: float,
     rf_inv_spoil_flattime: float,
     rf_inv_mu: float,
+    ge_segment_delay: float,
 ) -> tuple[pp.Sequence, float, float]:
     """Generate a 5(3)3 MOLLI sequence with bSSFP readout for cardiac T1 mapping.
 
@@ -90,7 +91,8 @@ def t1_molli_bssfp_kernel(
         Flat time of spoiler after inversion pulse (in seconds)
     rf_inv_mu
         Constant determining amplitude of frequency sweep of adiabatic inversion pulse
-
+    ge_segment_delay
+        Delay time at the end of each segment for GE scanners.
 
     Returns
     -------
@@ -203,7 +205,7 @@ def t1_molli_bssfp_kernel(
     )
 
     # calculate repetition time delay (tr_delay)
-    current_min_tr = min_tr + te_delay
+    current_min_tr = min_tr + te_delay + ge_segment_delay
     if tr is None:
         tr_delay = 0.0
     else:
@@ -250,6 +252,7 @@ def t1_molli_bssfp_kernel(
                     - current_te
                     - rf.shape_dur / 2
                     - max(rf.delay, gz.rise_time)
+                    - ge_segment_delay
                 )
 
                 # add trigger
@@ -263,7 +266,7 @@ def t1_molli_bssfp_kernel(
 
                 # add trigger and constant part of trigger delay
                 seq.add_block(
-                    pp.make_trigger(channel='physio1', duration=constant_trig_delay),
+                    pp.make_trigger(channel='physio1', duration=constant_trig_delay - ge_segment_delay),
                     pp.make_label(type='SET', label='TRID', value=44),
                 )
 
@@ -292,7 +295,7 @@ def t1_molli_bssfp_kernel(
                 )
                 # add trigger and constant part of trigger delay
                 seq.add_block(
-                    pp.make_trigger(channel='physio1', duration=constant_trig_delay),
+                    pp.make_trigger(channel='physio1', duration=constant_trig_delay - ge_segment_delay),
                     pp.make_label(type='SET', label='TRID', value=44),
                 )
 
@@ -341,7 +344,7 @@ def t1_molli_bssfp_kernel(
 
                 # add delay in case TR > min_TR
                 if tr_delay > 0:
-                    seq.add_block(pp.make_delay(tr_delay))
+                    seq.add_block(pp.make_delay(tr_delay - ge_segment_delay))
 
             contrast_index += 1
 
@@ -350,7 +353,7 @@ def t1_molli_bssfp_kernel(
             for _cardiac_index in range(3):
                 # add trigger and constant part of trigger delay
                 seq.add_block(
-                    pp.make_trigger(channel='physio1', duration=min_cardiac_trigger_delay),
+                    pp.make_trigger(channel='physio1', duration=min_cardiac_trigger_delay - ge_segment_delay),
                     pp.make_label(type='SET', label='TRID', value=44),
                 )
 
@@ -492,6 +495,7 @@ def main(
         rf_inv_spoil_risetime=rf_inv_spoil_risetime,
         rf_inv_spoil_flattime=rf_inv_spoil_flattime,
         rf_inv_mu=rf_inv_mu,
+        ge_segment_delay=0.0,
     )
 
     # check timing of the sequence

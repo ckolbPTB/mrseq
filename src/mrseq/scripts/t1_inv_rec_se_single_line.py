@@ -220,7 +220,7 @@ def t1_inv_rec_se_single_line_kernel(
 
             # calculate and add inversion time (TI) delay.
             # TI is defined as time from middle of inversion pulse to middle of excitation pulse.
-            ti_delay = ti - time_since_inversion - rf90.delay - rf90_duration / 2
+            ti_delay = ti - time_since_inversion - rf90.delay - rf90_duration / 2 - ge_segment_delay
             ti_delay = round_to_raster(ti_delay, system.block_duration_raster)
             if ti_delay < 0:
                 raise ValueError(
@@ -254,7 +254,7 @@ def t1_inv_rec_se_single_line_kernel(
 
             # calculate TR delay
             duration_tr_block = sum(seq.block_durations.values()) - _start_time_tr_block
-            tr_delay = round_to_raster(tr - duration_tr_block, system.block_duration_raster)
+            tr_delay = round_to_raster(tr - duration_tr_block - ge_segment_delay, system.block_duration_raster)
 
             # save time for sequence plot
             if ti_idx == 0 and pe_idx == 0:

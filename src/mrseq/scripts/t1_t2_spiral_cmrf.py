@@ -37,6 +37,7 @@ def t1_t2_spiral_cmrf_kernel(
     rf_duration: float,
     rf_bwt: float,
     rf_apodization: float,
+    ge_segment_delay: float,
     mrd_header_file: str | None,
 ) -> tuple[pp.Sequence, float, float]:
     """Generate a cardiac MR Fingerprinting sequence with spiral readout.
@@ -79,6 +80,8 @@ def t1_t2_spiral_cmrf_kernel(
         Bandwidth-time product of rf excitation pulse (Hz * seconds)
     rf_apodization
         Apodization factor of rf excitation pulse
+    ge_segment_delay
+        Delay time at the end of each segment for GE scanners.
     mrd_header_file
         Filename of the ISMRMRD header file. If None, no header file is created.
 
@@ -235,11 +238,11 @@ def t1_t2_spiral_cmrf_kernel(
                 rf_mu=rf_inv_mu,
                 system=system,
             )
-            constant_trig_delay = min_cardiac_trigger_delay - prep_dur
+            constant_trig_delay = min_cardiac_trigger_delay - prep_dur - ge_segment_delay
 
             # add trigger and constant part of trigger delay
             seq.add_block(
-                pp.make_trigger(channel='physio1', duration=constant_trig_delay),
+                pp.make_trigger(channel='physio1', duration=constant_trig_delay - ge_segment_delay),
                 pp.make_label(type='SET', label='TRID', value=1044),
             )
 
@@ -255,7 +258,7 @@ def t1_t2_spiral_cmrf_kernel(
         elif block % 5 == 1:
             # add trigger and trigger delay(s)
             seq.add_block(
-                pp.make_trigger(channel='physio1', duration=min_cardiac_trigger_delay),
+                pp.make_trigger(channel='physio1', duration=min_cardiac_trigger_delay - ge_segment_delay),
                 pp.make_label(type='SET', label='TRID', value=1044),
             )
             if use_soft_delay:
@@ -273,7 +276,7 @@ def t1_t2_spiral_cmrf_kernel(
 
             # add trigger and constant part of trigger delay
             seq.add_block(
-                pp.make_trigger(channel='physio1', duration=constant_trig_delay),
+                pp.make_trigger(channel='physio1', duration=constant_trig_delay - ge_segment_delay),
                 pp.make_label(type='SET', label='TRID', value=1044),
             )
 
@@ -460,6 +463,7 @@ def main(
         rf_duration=rf_duration,
         rf_bwt=rf_bwt,
         rf_apodization=rf_apodization,
+        ge_segment_delay=0.0,
         mrd_header_file=str(output_path / Path(filename + '_header.h5')),
     )
 

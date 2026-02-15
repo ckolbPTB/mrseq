@@ -32,6 +32,7 @@ def wasabi_gre_centric_kernel(
     rf_apodization: float,
     rf_spoiling_inc: float,
     adc_dwell_time: float,
+    ge_segment_delay: float,
 ) -> pp.Sequence:
     """Generate a WASABI sequence for simultaneous B0 and B1 mapping using a centric-out cartesian GRE readout.
 
@@ -73,6 +74,8 @@ def wasabi_gre_centric_kernel(
         Phase increment used for RF spoiling. Set to 0 to disable RF spoiling.
     adc_dwell_time
         Dwell time of ADC.
+    ge_segment_delay
+        Delay time at the end of each segment for GE scanners.
 
     Returns
     -------
@@ -160,6 +163,7 @@ def wasabi_gre_centric_kernel(
         + pp.calc_duration(gzr, gx_pre)  # slice selection re-phasing gradient and readout pre-winder
         + pp.calc_duration(gx)  # readout gradient
         + pp.calc_duration(gz_spoil, gx_post)  # gradient spoiler or readout-re-winder
+        + ge_segment_delay
     )
 
     # loop over frequency offsets
@@ -328,6 +332,7 @@ def main(
         rf_apodization=rf_apodization,
         rf_spoiling_inc=rf_spoiling_inc,
         adc_dwell_time=adc_dwell_time,
+        ge_segment_delay=0.0,
     )
 
     # check timing of the sequence
