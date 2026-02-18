@@ -236,8 +236,9 @@ def t1_radial_look_locker_kernel(
         rf_inc = divmod(rf_inc + rf_spoiling_phase_increment, 360.0)[1]
         rf_phase = divmod(rf_phase + rf_inc, 360.0)[1]
 
-        # calculate rotation angle for the current spoke
-        rotation_angle_rad = spoke_angle * spoke_
+        # calculate rotation angle for the current spoke, we start with angle > 0 to ensure we always have a
+        # gy/gy gradient which is import for GE
+        rotation_angle_rad = spoke_angle * (spoke_ + 1)
 
         if te_delay > 0:
             seq.add_block(gzr)

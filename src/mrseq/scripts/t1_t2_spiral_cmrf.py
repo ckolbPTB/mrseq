@@ -238,11 +238,18 @@ def t1_t2_spiral_cmrf_kernel(
                 rf_mu=rf_inv_mu,
                 system=system,
             )
-            constant_trig_delay = min_cardiac_trigger_delay - prep_dur - ge_segment_delay
+            constant_trig_delay = (
+                min_cardiac_trigger_delay - prep_dur - ge_segment_delay
+            )  # delay after inversion segment
 
             # add trigger and constant part of trigger delay
             seq.add_block(
-                pp.make_trigger(channel='physio1', duration=constant_trig_delay - ge_segment_delay),
+                pp.make_trigger(
+                    channel='physio1',
+                    duration=round_to_raster(
+                        constant_trig_delay - ge_segment_delay, raster_time=system.block_duration_raster
+                    ),
+                ),
                 pp.make_label(type='SET', label='TRID', value=1044),
             )
 
@@ -258,7 +265,12 @@ def t1_t2_spiral_cmrf_kernel(
         elif block % 5 == 1:
             # add trigger and trigger delay(s)
             seq.add_block(
-                pp.make_trigger(channel='physio1', duration=min_cardiac_trigger_delay - ge_segment_delay),
+                pp.make_trigger(
+                    channel='physio1',
+                    duration=round_to_raster(
+                        min_cardiac_trigger_delay - ge_segment_delay, raster_time=system.block_duration_raster
+                    ),
+                ),
                 pp.make_label(type='SET', label='TRID', value=1044),
             )
             if use_soft_delay:
@@ -276,7 +288,12 @@ def t1_t2_spiral_cmrf_kernel(
 
             # add trigger and constant part of trigger delay
             seq.add_block(
-                pp.make_trigger(channel='physio1', duration=constant_trig_delay - ge_segment_delay),
+                pp.make_trigger(
+                    channel='physio1',
+                    duration=round_to_raster(
+                        constant_trig_delay - ge_segment_delay, raster_time=system.block_duration_raster
+                    ),
+                ),
                 pp.make_label(type='SET', label='TRID', value=1044),
             )
 

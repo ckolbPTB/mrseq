@@ -215,7 +215,7 @@ def t2_tse_cartesian_kernel(
         tr_delay = round_to_raster(tr - duration_tr_block - ge_segment_delay, system.block_duration_raster)
         if tr_delay < 0:
             raise ValueError('Desired TR too short for given sequence parameters.')
-        seq.add_block(pp.make_delay(tr_delay - ge_segment_delay))
+        seq.add_block(pp.make_delay(tr_delay))
         seq.add_block(pp.make_label(type='SET', label='NAV', value=False))
 
     # add all events to the sequence

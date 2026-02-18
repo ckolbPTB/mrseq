@@ -117,31 +117,47 @@ def cartesian_flash_kernel(
     n_readout_with_oversampling = n_readout_with_oversampling + np.mod(n_readout_with_oversampling, 2)  # make even
     adc = pp.make_adc(num_samples=n_readout_with_oversampling, duration=gx.flat_time, delay=gx.rise_time, system=system)
 
-    # create frequency encoding pre- and re-winder gradient
-    gx_pre = pp.make_trapezoid(channel='x', area=-gx.area / 2 - delta_k / 2, duration=gx_pre_duration, system=system)
-    gx_post = pp.make_trapezoid(channel='x', area=-gx.area / 2 + delta_k / 2, duration=gx_pre_duration, system=system)
-    k0_center_id = np.where((np.arange(n_readout_with_oversampling) - n_readout_with_oversampling / 2) * delta_k == 0)[
-        0
-    ][0]
-    # create frequency encoding pre- and re-winder gradient
-    gx_pre = pp.make_trapezoid(channel='x', area=-gx.area / 2 - delta_k / 2, duration=gx_pre_duration, system=system)
-    gx_post = pp.make_trapezoid(channel='x', area=-gx.area / 2 + delta_k / 2, duration=gx_pre_duration, system=system)
+    # create readout pre- and re-winder gradient, reduce slew rate because all three gradients are on at the same time
+    gx_pre = pp.make_trapezoid(
+        channel='x',
+        area=-gx.area / 2 - delta_k / 2,
+        duration=gx_pre_duration,
+        system=system,
+        max_slew=system.max_slew * 0.7,
+    )
+    gx_post = pp.make_trapezoid(
+        channel='x',
+        area=-gx.area / 2 + delta_k / 2,
+        duration=gx_pre_duration,
+        system=system,
+        max_slew=system.max_slew * 0.7,
+    )
     k0_center_id = np.where((np.arange(n_readout_with_oversampling) - n_readout_with_oversampling / 2) * delta_k == 0)[
         0
     ][0]
 
-    # phase encoding gradient
+    # phase encoding gradient, reduce slew rate because all three gradients are on at the same time
     gy_pre_max = pp.make_trapezoid(
-        channel='y', area=delta_k * n_phase_encoding / 2, duration=gx_pre_duration, system=system
+        channel='y',
+        area=delta_k * n_phase_encoding / 2,
+        duration=gx_pre_duration,
+        system=system,
+        max_slew=system.max_slew * 0.7,
     )
 
-    # slice encoding gradient
+    # slice encoding gradient, reduce slew rate because all three gradients are on at the same time
     gz_pre_max = pp.make_trapezoid(
-        channel='z', area=1 / fov_z * n_slice_encoding / 2, duration=gx_pre_duration, system=system
+        channel='z',
+        area=1 / fov_z * n_slice_encoding / 2,
+        duration=gx_pre_duration,
+        system=system,
+        max_slew=system.max_slew * 0.7,
     )
 
-    # create spoiler gradients
-    gz_spoil = pp.make_trapezoid(channel='z', system=system, area=gz_spoil_area, duration=gz_spoil_duration)
+    # create spoiler gradients, reduce slew rate because all three gradients are on at the same time
+    gz_spoil = pp.make_trapezoid(
+        channel='z', system=system, area=gz_spoil_area, duration=gz_spoil_duration, max_slew=system.max_slew * 0.7
+    )
 
     # calculate minimum echo time
     gzr_gx_dur = pp.calc_duration(gzr) + pp.calc_duration(gx_pre)  # gzr and gx_pre are applied sequentially
@@ -211,7 +227,7 @@ def cartesian_flash_kernel(
                 adc.phase_offset = rf_phase / 180 * np.pi
 
             # add slice selective excitation pulse
-            seq.add_block(rf, gz, pp.make_label(type='SET', label='TRID', value=1))
+            seq.add_block(rf, gz, pp.make_label(type='SET', label='TRID', value=88 if pe < 0 else 1))
 
             # update rf phase offset for the next excitation pulse
             rf_inc = divmod(rf_inc + rf_spoiling_phase_increment, 360.0)[1]

@@ -254,7 +254,12 @@ def t2_t2prep_flash_kernel(
 
                 # add trigger and constant part of trigger delay
                 seq.add_block(
-                    pp.make_trigger(channel='physio1', duration=constant_trig_delay - ge_segment_delay),
+                    pp.make_trigger(
+                        channel='physio1',
+                        duration=round_to_raster(
+                            constant_trig_delay - ge_segment_delay, raster_time=system.block_duration_raster
+                        ),
+                    ),
                     pp.make_label(type='SET', label='TRID', value=1044),
                 )
 
@@ -275,7 +280,12 @@ def t2_t2prep_flash_kernel(
 
                 # add trigger and constant part of trigger delay
                 seq.add_block(
-                    pp.make_trigger(channel='physio1', duration=constant_trig_delay - ge_segment_delay),
+                    pp.make_trigger(
+                        channel='physio1',
+                        duration=round_to_raster(
+                            constant_trig_delay - ge_segment_delay, raster_time=system.block_duration_raster
+                        ),
+                    ),
                     pp.make_label(type='SET', label='TRID', value=1044),
                 )
 
@@ -317,7 +327,11 @@ def t2_t2prep_flash_kernel(
 
                 # add delay in case TR > min_TR
                 if tr_delay > 0:
-                    seq.add_block(pp.make_delay(tr_delay - ge_segment_delay))
+                    seq.add_block(
+                        pp.make_delay(
+                            round_to_raster(tr_delay - ge_segment_delay, raster_time=system.block_duration_raster)
+                        )
+                    )
 
             if (t2_idx < len(t2_prep_echo_times) - 1) or (cardiac_cycle_idx < n_cycles_per_image - 1):
                 # add delay for magnetization recovery

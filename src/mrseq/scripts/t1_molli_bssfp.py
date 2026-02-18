@@ -266,7 +266,12 @@ def t1_molli_bssfp_kernel(
 
                 # add trigger and constant part of trigger delay
                 seq.add_block(
-                    pp.make_trigger(channel='physio1', duration=constant_trig_delay - ge_segment_delay),
+                    pp.make_trigger(
+                        channel='physio1',
+                        duration=round_to_raster(
+                            constant_trig_delay - ge_segment_delay, raster_time=system.block_duration_raster
+                        ),
+                    ),
                     pp.make_label(type='SET', label='TRID', value=44),
                 )
 
@@ -295,7 +300,12 @@ def t1_molli_bssfp_kernel(
                 )
                 # add trigger and constant part of trigger delay
                 seq.add_block(
-                    pp.make_trigger(channel='physio1', duration=constant_trig_delay - ge_segment_delay),
+                    pp.make_trigger(
+                        channel='physio1',
+                        duration=round_to_raster(
+                            constant_trig_delay - ge_segment_delay, raster_time=system.block_duration_raster
+                        ),
+                    ),
                     pp.make_label(type='SET', label='TRID', value=44),
                 )
 
@@ -344,7 +354,11 @@ def t1_molli_bssfp_kernel(
 
                 # add delay in case TR > min_TR
                 if tr_delay > 0:
-                    seq.add_block(pp.make_delay(tr_delay - ge_segment_delay))
+                    seq.add_block(
+                        pp.make_delay(
+                            round_to_raster(tr_delay - ge_segment_delay, raster_time=system.block_duration_raser)
+                        )
+                    )
 
             contrast_index += 1
 
@@ -353,7 +367,12 @@ def t1_molli_bssfp_kernel(
             for _cardiac_index in range(3):
                 # add trigger and constant part of trigger delay
                 seq.add_block(
-                    pp.make_trigger(channel='physio1', duration=min_cardiac_trigger_delay - ge_segment_delay),
+                    pp.make_trigger(
+                        channel='physio1',
+                        duration=round_to_raster(
+                            min_cardiac_trigger_delay - ge_segment_delay, raster_time=system.block_duration_raster
+                        ),
+                    ),
                     pp.make_label(type='SET', label='TRID', value=44),
                 )
 
