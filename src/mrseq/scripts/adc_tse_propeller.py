@@ -252,7 +252,12 @@ def adc_tse_propeller_kernel(
             acq.resize(trajectory_dimensions=3, number_of_samples=adc.num_samples)
             prot.append_acquisition(acq)
 
-    pe_idx = [0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5 - 6, 6, -7, 7, -8, 8]
+    # low-high acquisition within each blade
+    if np.mod(n_echoes, 2) == 1:
+        pe_idx = np.arange(-(n_echoes - 1) // 2, (n_echoes + 1) // 2)
+    else:
+        pe_idx = np.arange(-n_echoes // 2, n_echoes // 2)
+    pe_idx = pe_idx[np.argsort(np.abs(pe_idx), kind='stable')]
 
     # add all events to the sequence
     for se in range(n_slice_encoding):
