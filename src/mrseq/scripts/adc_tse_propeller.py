@@ -1,5 +1,6 @@
 """PROPELLER turbo-spin echo sequence for ADC mapping."""
 
+from collections.abc import Sequence
 from pathlib import Path
 
 import ismrmrd
@@ -36,7 +37,7 @@ def adc_tse_propeller_kernel(
     gz_crusher_duration: float,
     gz_crusher_area: float,
     ge_segment_delay: float,
-    g_diff_amplitude: Sequence[float],
+    g_diff_amplitude: np.ndarray,
     g_diff_duration: float,
     g_diff_delta_time: float,
     mrd_header_file: str | Path | None,
@@ -440,10 +441,12 @@ def main(
     # diffusion gradients
     g_diff_delta_time = 5.5e-3
     g_diff_duration = 1e-3
-    g_diff_amplitude = [
-        np.sqrt(b * 1e6 / ((2 * np.pi) ** 2 * g_diff_duration**2 * (g_diff_delta_time - g_diff_duration / 3)))
-        for b in b_values
-    ]
+    g_diff_amplitude = np.asarray(
+        [
+            np.sqrt(b * 1e6 / ((2 * np.pi) ** 2 * g_diff_duration**2 * (g_diff_delta_time - g_diff_duration / 3)))
+            for b in b_values
+        ]
+    )
 
     # define sequence filename
     filename = f'{Path(__file__).stem}_{int(fov_xy * 1000)}fov_xy_{int(fov_z * 1000)}_fov_z_'
