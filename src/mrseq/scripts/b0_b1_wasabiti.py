@@ -33,6 +33,7 @@ def wasabiti_gre_centric_kernel(
     rf_apodization: float,
     rf_spoiling_inc: float,
     adc_dwell_time: float,
+    sat_pulse_max_b1: float,
 ) -> pp.Sequence:
     """Generate a WASABI sequence for simultaneous B0 and B1 mapping using a centric-out cartesian GRE readout.
 
@@ -71,9 +72,11 @@ def wasabiti_gre_centric_kernel(
     rf_apodization
         Apodization factor of rf excitation pulse
     rf_spoiling_inc
-        Phase increment used for RF spoiling. Set to 0 to disable RF spoiling.
+        Phase increment used for RF spoiling. Set to 0 to disable RF spoiling
     adc_dwell_time
         Dwell time of ADC.
+    sat_pulse_max_b1
+        Maximum B1 field amplitude of adiabatic saturation pulse (in µT)
 
     Returns
     -------
@@ -151,7 +154,7 @@ def wasabiti_gre_centric_kernel(
     # create post preparation spoiler gradient
     prep_spoil = pp.make_trapezoid(channel='z', area=5 * gz_spoil.area, system=system)
 
-    # calculate minimum echo time
+    # calculate minimum echo time - only for sequence definitions
     min_te = (
         rf.shape_dur / 2  # time from center to end of RF pulse
         + max(rf.ringdown_time, gz.fall_time)  # RF ringdown time or gradient fall time
@@ -161,7 +164,7 @@ def wasabiti_gre_centric_kernel(
         + (k0_center_id + 0.5) * adc.dwell  # time from beginning of ADC to time point of k-space center sample
     ).item()
 
-    # calculate minimum repetition time
+    # calculate minimum repetition time - only for sequence definitions
     min_tr = (
         pp.calc_duration(gz)  # rf pulse
         + pp.calc_duration(gzr, gx_pre)  # slice selection re-phasing gradient and readout pre-winder
@@ -175,7 +178,7 @@ def wasabiti_gre_centric_kernel(
         rep_label = pp.make_label(type='SET', label='REP', value=int(rep_idx))
 
         # add adiabatic saturation pulse train and recovery time
-        seq, last_spoil_dur = add_adia_sat_block(seq=seq, sys=system)
+        seq, last_spoil_dur = add_adia_sat_block(seq=seq, system=system, max_b1=sat_pulse_max_b1)
         seq.add_block(
             pp.make_delay(
                 round_to_raster(t_recovery[rep_idx] - last_spoil_dur, raster_time=system.block_duration_raster)
@@ -318,8 +321,11 @@ def main(
     )
 
     # WASABI block pulse
-    rf_prep_duration: float = 5e-3
-    rf_prep_amplitude: float = 3.75
+    rf_prep_duration = 5e-3
+    rf_prep_amplitude = 3.75
+
+    # Saturation pulse
+    sat_pulse_max_b1 = 20  # (µT)
 
     seq = wasabiti_gre_centric_kernel(
         system=system,
@@ -340,6 +346,7 @@ def main(
         rf_apodization=rf_apodization,
         rf_spoiling_inc=rf_spoiling_inc,
         adc_dwell_time=adc_dwell_time,
+        sat_pulse_max_b1=sat_pulse_max_b1,
     )
 
     # check timing of the sequence

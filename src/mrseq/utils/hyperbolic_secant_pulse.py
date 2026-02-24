@@ -1,4 +1,4 @@
-"""Functions to create an adiabatic hyperbolic secant full passage pulse."""
+"""Adiabatic hyperbolic secant full passage pulse."""
 
 from types import SimpleNamespace
 
@@ -6,7 +6,6 @@ import numpy as np
 from pypulseq import Opts
 
 
-# Todo: import from BMCTool instead ?!
 def calculate_phase(
     frequency: np.ndarray, duration: float, samples: int, shift_idx: int = -1, pos_offsets: bool = False
 ) -> np.ndarray:
@@ -22,7 +21,6 @@ def calculate_phase(
     return phase
 
 
-# Todo: import from BMCTool instead ?!
 def create_arbitrary_pulse_with_phase(
     signal: np.ndarray,
     flip_angle: float,
