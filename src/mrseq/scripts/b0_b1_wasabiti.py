@@ -153,7 +153,7 @@ def wasabiti_gre_centric_kernel(
 
     # phase encoding gradient
     gy_pre_max = pp.make_trapezoid(
-        channel='y', area=delta_k * n_phase_encoding / 2, duration=gx_pre_duration, system=system
+        channel='y', area=delta_k * readout_oversampling * n_phase_encoding / 2, duration=gx_pre_duration, system=system
     )
 
     # create readout spoiler gradient
@@ -218,7 +218,7 @@ def wasabiti_gre_centric_kernel(
                 rf_phase = divmod(rf_phase + rf_inc, 360.0)[1]
 
             # calculate phase encoding gradient for current phase encoding step
-            gy_pre = pp.scale_grad(gy_pre_max, (pe_idx - n_phase_encoding / 2) / (n_phase_encoding / 2))
+            gy_pre = pp.scale_grad(gy_pre_max, pe_idx / (n_phase_encoding / 2))
 
             # add slice-selective rf pulse
             seq.add_block(rf, gz)
