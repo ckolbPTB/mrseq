@@ -1,11 +1,10 @@
-"""2D Echo Planar Imaging (EPI) sequence."""
+"""2D Echo Planar Imaging (EPI) spin echo (SE) sequence."""
 
 from math import floor
 from pathlib import Path
 from typing import Literal
 
 import ismrmrd
-import matplotlib.pyplot as plt
 import numpy as np
 import pypulseq as pp
 
@@ -73,20 +72,21 @@ def epi2d_se_kernel(
         Apodization factor of rf excitation pulse
     readout_type
         Readout type ('symmetric' or 'flyback').
-    echo_type
-        Echo type ('FID' or 'SE').
     oversampling
-        ADC oversampling factor.
+        Readout oversampling factor. Can be 1 (no oversampling), 2, or 4.
     ramp_sampling
-        If True, ADC is active during gradient ramps (optimized timing).
+        If True, ADC is active during gradient ramps for optimized timing.
     partial_fourier_factor
-        Partial Fourier factor (0.5 to 1.0).
+        Desired partial Fourier factor in "phase encoding" direction. Must be larger than 0.5 and smaller or equal to 1.
+        The actual partial Fourier factor might slightly deviate from the desired value.
     add_spoiler
-        Enable spoiling gradients.
+        If True, a spoiler gradient will be added to the sequence after the EPI readout.
     add_noise_acq
-        Enable noise acquisition.
+        If True, noise acquisitions will be added at the beginning of the sequence.
     add_navigator_acq
-        Enable navigator acquisition.
+        If True, 3 navigator acquisitions will be added to the sequence to allow for ghost corrections.
+        The navigator acquisitions are added between the rf excitation pulse and the refocusing pulse.
+        Be aware that navigator acquisitions will increase the minimum echo and repetition times.
     mrd_header_file
         Filename of the ISMRMRD header file to be created. If None, no header file is created.
 
@@ -266,10 +266,8 @@ def epi2d_se_kernel(
             acq.resize(trajectory_dimensions=2, number_of_samples=epi2d.adc.num_samples)
             prot.append_acquisition(acq)
 
-    t_after_noise = sum(seq.block_durations.values())
-
     for slice_ in range(n_slices):
-        # define label(s)
+        # define slice label
         slice_label = pp.make_label(label='SLC', type='SET', value=slice_)
 
         # set frequency offset for current slice
@@ -282,8 +280,8 @@ def epi2d_se_kernel(
         # add navigator scans for ghost correction
         if add_navigator_acq:
             # reverse the readout gradient and pre-winder in advance for navigator
-            gx_pre = pp.scale_grad(epi2d.gx_pre, 1)
-            gx = pp.scale_grad(epi2d.gx, 1)
+            gx_pre = pp.scale_grad(epi2d.gx_pre, -1)
+            gx = pp.scale_grad(epi2d.gx, -1)
             # add slice selection rewinder and readout pre-winder in x direction (gy_pre will be added after navigators)
             gzr, gx_pre = pp.align(left=[gzr], right=[gx_pre])
             seq.add_block(
@@ -292,10 +290,10 @@ def epi2d_se_kernel(
                 pp.make_label(label='NAV', type='SET', value=1),
                 pp.make_label(label='LIN', type='SET', value=floor(n_phase_encoding / 2)),
             )
+            # reverse gx_pre back after adding to sequence
             gx_pre = pp.scale_grad(gx_pre, -1)
 
-            # reverse gx_pre back after addBlock
-            gx_pre = pp.scale_grad(gx_pre, -1)
+            # add 3 navigator acquisitions
             for n in range(3):
                 seq.add_block(
                     gx,
@@ -305,6 +303,7 @@ def epi2d_se_kernel(
                     pp.make_label(label='AVG', type='SET', value=(n + 1) == 3),
                 )
                 gx = pp.scale_grad(gx, -1)
+                # add navigator acquisitions to ISMRMRD file
                 if mrd_header_file:
                     acq = ismrmrd.Acquisition()
                     acq.resize(trajectory_dimensions=2, number_of_samples=epi2d.adc.num_samples)
@@ -390,11 +389,7 @@ def epi2d_se_kernel(
     seq.set_definition('TR', tr or float(min_tr))
     seq.set_definition('ReadoutOversamplingFactor', oversampling)
 
-    t_exc = t_after_noise + rf.delay + rf.shape_dur / 2
-    t_ref = t_exc + t_exc_to_ref
-    t_echo = t_exc + t_exc_to_ref + t_ref_to_kcenter
-
-    return seq, min_te, min_tr, t_exc, t_ref, t_echo
+    return seq, min_te, min_tr
 
 
 def main(
@@ -417,12 +412,51 @@ def main(
     test_report: bool = True,
     timing_check: bool = True,
 ) -> tuple[pp.Sequence, Path]:
-    """Generate an Echo-Planar Imaging (EPI) sequence.
+    """Generate a 2D Echo Planar Imaging (EPI) spin echo (SE) sequence.
+
+    Parameters
+    ----------
+    system
+        PyPulseq system limits object.
+    te
+        Desired echo time (TE) (in seconds). Minimum echo time is used if set to None.
+    tr
+        Desired repetition time (TR) (in seconds). Minimum repetition time is used if set to None.
+    fov
+        Field of view in x and y direction (in meters).
+    n_readout
+        Number of frequency encoding steps.
+    n_phase_encoding
+        Number of phase encoding steps.
+    n_slices
+        Number of slices.
+    slice_thickness
+        Slice thickness of the 2D slice (in meters).
+    bandwidth
+        Total receiver bandwidth (in Hz).
+    readout_type
+        Readout type ('symmetric' or 'flyback').
+    oversampling
+        Readout oversampling factor. Can be 1 (no oversampling), 2, or 4.
+    ramp_sampling
+        If True, ADC is active during gradient ramps for optimized timing.
+    partial_fourier_factor
+        Desired partial Fourier factor in "phase encoding" direction.
+    add_navigator_acq
+        If True, navigator acquisitions will be added for ghost corrections.
+    add_noise_acq
+        If True, noise acquisitions will be added at the beginning of the sequence.
+    show_plots
+        Toggles sequence plot.
+    test_report
+        Toggles advanced test report.
+    timing_check
+        Toggles timing check of the sequence.
 
     Returns
     -------
     seq
-        Sequence object of radial FLASH sequence.
+        Sequence object of 2D EPI SE sequence.
     file_path
         Path to the sequence file.
     """
@@ -439,11 +473,11 @@ def main(
     enable_gradient_spoiling = True
 
     # define sequence filename
-    rs_string = 'rs' if ramp_sampling else 'nors'
-    pf_string = f'{partial_fourier_factor}pf'.replace('.', 'p')
-    readout_string = 'sym' if readout_type == 'symmetric' else 'flyb'
-    noise_string = 'withnoise' if add_noise_acq else 'nonoise'
-    nav_string = 'withnav' if add_navigator_acq else 'nonav'
+    rs_string = 'rs' if ramp_sampling else 'nors'  # ramp sampling
+    pf_string = f'{partial_fourier_factor}pf'.replace('.', 'p')  # partial fourier factor
+    readout_string = 'sym' if readout_type == 'symmetric' else 'flyb'  # readout type
+    noise_string = 'withnoise' if add_noise_acq else 'nonoise'  # noise acquisition
+    nav_string = 'withnav' if add_navigator_acq else 'nonav'  # navigator acquisition
 
     filename = f'{Path(__file__).stem}_{int(fov * 1000)}fov_{n_readout}px'
     filename += f'_{readout_string}_se_{oversampling}ro_{rs_string}_{pf_string}'
@@ -458,7 +492,7 @@ def main(
 
     mrd_file = output_path / Path(filename + '_header.h5')
 
-    seq, _min_te, min_tr, t_exc, t_ref, t_echo = epi2d_se_kernel(
+    seq, _min_te, min_tr = epi2d_se_kernel(
         system=system,
         te=te,
         tr=tr,
@@ -482,17 +516,6 @@ def main(
         mrd_header_file=mrd_file,
     )
 
-    # print(f'min_te = {_min_te * 1000:.4f}')
-    # print(f'min_tr = {min_tr * 1000:.4f}')
-    # print(f't_exc = {t_exc * 1000:.4f}')
-    # print(f't_ref = {t_ref * 1000:.4f}')
-    # print(f't_echo = {t_echo * 1000:.4f}')
-    # print(f'Echo time (TE) = {(t_echo - t_exc) * 1000:.4f}')
-
-    # print(f'Time from exc to ref: {(t_ref - t_exc) * 1000:.4f}')
-    # print(f'Time from ref to echo: {(t_echo - t_ref) * 1000:.4f}')
-    # print(f'added together = {((t_ref - t_exc) + (t_echo - t_ref)) * 1000:.4f}')
-
     # check timing of the sequence
     if timing_check and not test_report:
         ok, error_report = seq.check_timing()
@@ -502,7 +525,7 @@ def main(
             print('\nTiming check failed! Error listing follows\n')
             print(error_report)
 
-    # show advanced rest report
+    # show advanced test report
     if test_report:
         print('\nCreating advanced test report...')
         print(seq.test_report())
@@ -511,18 +534,8 @@ def main(
     print(f"\nSaving sequence file '{filename}.seq' into folder '{output_path}'.")
     seq.write(str(output_path / filename), create_signature=True)
 
-    # # calculate k-space trajectory
-    # k_traj_adc, k_traj, _, _, _ = seq.calculate_kspace()
-
-    # # plot trajectory
-    # fig = plt.figure()
-    # plt.plot(k_traj[0], k_traj[1], 'b')
-    # plt.plot(k_traj_adc[0], k_traj_adc[1], 'x', color='red', markersize=4)
-    # plt.grid()
-    # plt.show()
-
     if show_plots:
-        seq.plot(time_range=(0, 10 * (tr or min_tr)), plot_now=False)
+        seq.plot(time_range=(0, 10 * (tr or min_tr)), plot_now=True)
 
     return seq, output_path / filename
 
