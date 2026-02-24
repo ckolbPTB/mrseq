@@ -10,6 +10,7 @@ import pypulseq as pp
 from mrseq.utils import round_to_raster
 from mrseq.utils import spiral_acquisition
 from mrseq.utils import sys_defaults
+from mrseq.utils import write_sequence
 from mrseq.utils.ismrmrd import Fov
 from mrseq.utils.ismrmrd import Limits
 from mrseq.utils.ismrmrd import MatrixSize
@@ -120,6 +121,7 @@ def spiral_flash_kernel(
         max_pre_duration=gx_pre_duration,
         spiral_type='out',
     )
+    max_spiral_duration = max(pp.calc_duration(gx, gy) for gx, gy in zip(gx, gy, strict=True))
 
     # create spoiler gradients
     gz_spoil = pp.make_trapezoid(channel='z', system=system, area=gz_spoil_area, duration=gz_spoil_duration)
@@ -143,7 +145,7 @@ def spiral_flash_kernel(
     min_tr = (
         pp.calc_duration(gz)  # rf pulse
         + pp.calc_duration(gzr)  # slice rewinder
-        + pp.calc_duration(gx[0], gy[0])  # readout gradient
+        + max_spiral_duration  # readout gradient
         + pp.calc_duration(gz_spoil)  # gradient spoiler or readout-re-winder
     )
 
@@ -219,9 +221,9 @@ def spiral_flash_kernel(
                 labels = []
                 labels.append(pp.make_label(label='LIN', type='SET', value=spiral_))
                 labels.append(pp.make_label(label='SLC', type='SET', value=slice_))
-                seq.add_block(gx[spiral_], gy[spiral_], adc, *labels)
+                seq.add_block(gx[spiral_], gy[spiral_], adc, pp.make_delay(max_spiral_duration), *labels)
             else:
-                seq.add_block(pp.make_delay(pp.calc_duration(gx[0], gy[0], adc)))
+                seq.add_block(pp.make_delay(max_spiral_duration))
             seq.add_block(gz_spoil)
 
             # add delay in case TR > min_TR
@@ -263,6 +265,7 @@ def main(
     show_plots: bool = True,
     test_report: bool = True,
     timing_check: bool = True,
+    v141_compatibility: bool = True,
 ) -> tuple[pp.Sequence, Path]:
     """Generate a spiral FLASH sequence.
 
@@ -296,6 +299,8 @@ def main(
         Toggles advanced test report.
     timing_check
         Toggles timing check of the sequence.
+    v141_compatibility
+        Save the sequence in pulseq v1.4.1 for backwards compatibility.
 
     Returns
     -------
@@ -376,7 +381,7 @@ def main(
 
     # save seq-file to disk
     print(f"\nSaving sequence file '{filename}.seq' into folder '{output_path}'.")
-    seq.write(str(output_path / filename), create_signature=True)
+    write_sequence(seq, str(output_path / filename), create_signature=True, v141_compatibility=v141_compatibility)
 
     if show_plots:
         seq.plot(time_range=(0, 10 * (tr or min_tr)))
