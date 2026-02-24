@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pypulseq as pp
 
+from mrseq.preparations.adiabatic_sat_prep import add_adia_sat_block
 from mrseq.utils import find_gx_flat_time_on_adc_raster
 from mrseq.utils import round_to_raster
 from mrseq.utils import sys_defaults
@@ -13,11 +14,11 @@ from mrseq.utils.constants import GYROMAGNETIC_RATIO_PROTON
 from mrseq.utils.trajectory import cartesian_phase_encoding
 
 
-def wasabi_gre_centric_kernel(
+def wasabiti_gre_centric_kernel(
     system: pp.Opts,
     frequency_offsets: np.ndarray,
     norm_offset: float | None,
-    t_recovery: float,
+    t_recovery: np.ndarray,
     t_recovery_norm: float,
     fov_xy: float,
     n_readout: int,
@@ -85,9 +86,15 @@ def wasabi_gre_centric_kernel(
     if readout_oversampling < 1:
         raise ValueError('Readout oversampling factor must be >= 1.')
 
+    if len(t_recovery) != len(frequency_offsets):
+        raise ValueError(
+            f'Number of recovery times ({len(t_recovery)}) and offsets ({len(frequency_offsets)}) have to match.'
+        )
+
     # add normalization offset to beginning of frequency offsets if specified
     if norm_offset is not None:
         frequency_offsets = np.concatenate(([norm_offset], frequency_offsets))
+        t_recovery = np.concatenate(([t_recovery_norm], t_recovery))
 
     # create WASABI block pulse
     rf_prep_flipangle_rad = rf_prep_amplitude * 1e-6 * rf_prep_duration * GYROMAGNETIC_RATIO_PROTON * 2 * np.pi
@@ -167,11 +174,13 @@ def wasabi_gre_centric_kernel(
         # set repetition ('REP') label for current frequency offset
         rep_label = pp.make_label(type='SET', label='REP', value=int(rep_idx))
 
-        # add delay for normalization offset
-        if rep_idx == 0 and norm_offset is not None:
-            seq.add_block(pp.make_delay(t_recovery_norm))
-        else:
-            seq.add_block(pp.make_delay(t_recovery))
+        # add adiabatic saturation pulse train and recovery time
+        seq, last_spoil_dur = add_adia_sat_block(seq=seq, sys=system)
+        seq.add_block(
+            pp.make_delay(
+                round_to_raster(t_recovery[rep_idx] - last_spoil_dur, raster_time=system.block_duration_raster)
+            )
+        )
 
         # update frequency offset of WASABI block pulse and add it to sequence
         rf_prep.freq_offset = freq_offset_hz
@@ -233,7 +242,7 @@ def main(
     system: pp.Opts | None = None,
     frequency_offsets: np.ndarray | None = None,
     norm_offset: float | None = -35e3,
-    t_recovery: float = 3.0,
+    t_recovery: float | np.ndarray = 3.0,
     t_recovery_norm: float = 12.0,
     fov_xy: float = 200e-3,
     n_readout: int = 128,
@@ -288,6 +297,9 @@ def main(
     if frequency_offsets is None:
         frequency_offsets = np.linspace(-240, 240, 31)
 
+    if not isinstance(t_recovery, np.ndarray):
+        t_recovery = np.ones_like(frequency_offsets) * t_recovery
+
     # define settings of rf excitation pulse
     rf_duration = 1.28e-3  # duration of the rf excitation pulse [s]
     rf_flip_angle = 10.0  # flip angle of rf excitation pulse [°]
@@ -309,7 +321,7 @@ def main(
     rf_prep_duration: float = 5e-3
     rf_prep_amplitude: float = 3.75
 
-    seq = wasabi_gre_centric_kernel(
+    seq = wasabiti_gre_centric_kernel(
         system=system,
         frequency_offsets=frequency_offsets,
         norm_offset=norm_offset,

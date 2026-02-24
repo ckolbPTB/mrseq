@@ -1,7 +1,7 @@
 """Tests for WASABI sequence."""
 
 import pytest
-from mrseq.scripts.b0_b1_wasabi import main as create_seq
+from mrseq.scripts.b0_b1_wasabiti import main as create_seq
 
 EXPECTED_DUR = 122.1104  # defined 2026-02-10
 
