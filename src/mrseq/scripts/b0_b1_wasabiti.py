@@ -23,6 +23,7 @@ def wasabiti_gre_centric_kernel(
     fov_xy: float,
     n_readout: int,
     readout_oversampling: float,
+    gx_pre_duration: float,
     n_phase_encoding: int,
     slice_thickness: float,
     rf_prep_duration: float,
@@ -55,6 +56,8 @@ def wasabiti_gre_centric_kernel(
         Number of frequency encoding steps.
     readout_oversampling
         Readout oversampling factor, commonly 2. This reduces aliasing artifacts.
+    gx_pre_duration
+        Duration of readout pre-winder gradient (in seconds)
     n_phase_encoding
         Number of phase encoding steps.
     slice_thickness
@@ -122,13 +125,6 @@ def wasabiti_gre_centric_kernel(
         use='excitation',
     )
 
-    # define centric-out phase encoding steps
-    kpe, _ = cartesian_phase_encoding(
-        n_phase_encoding=n_phase_encoding,
-        acceleration=1,
-        sampling_order='low_high',
-    )
-
     # create readout gradient and ADC
     delta_k = 1 / (fov_xy * readout_oversampling)
     n_readout_with_oversampling = int(n_readout * readout_oversampling)
@@ -142,11 +138,23 @@ def wasabiti_gre_centric_kernel(
     adc = pp.make_adc(num_samples=n_readout_with_oversampling, duration=gx.flat_time, delay=gx.rise_time, system=system)
 
     # create frequency encoding pre- and re-winder gradient
-    gx_pre = pp.make_trapezoid(channel='x', area=-gx.area / 2 - delta_k / 2, system=system)
-    gx_post = pp.make_trapezoid(channel='x', area=-gx.area / 2 + delta_k / 2, system=system)
+    gx_pre = pp.make_trapezoid(channel='x', area=-gx.area / 2 - delta_k / 2, duration=gx_pre_duration, system=system)
+    gx_post = pp.make_trapezoid(channel='x', area=-gx.area / 2 + delta_k / 2, duration=gx_pre_duration, system=system)
     k0_center_id = np.where((np.arange(n_readout_with_oversampling) - n_readout_with_oversampling / 2) * delta_k == 0)[
         0
     ][0]
+
+    # define centric-out phase encoding steps
+    kpe, _ = cartesian_phase_encoding(
+        n_phase_encoding=n_phase_encoding,
+        acceleration=1,
+        sampling_order='low_high',
+    )
+
+    # phase encoding gradient
+    gy_pre_max = pp.make_trapezoid(
+        channel='y', area=delta_k * n_phase_encoding / 2, duration=gx_pre_duration, system=system
+    )
 
     # create readout spoiler gradient
     gz_spoil = pp.make_trapezoid(channel='z', area=4 / slice_thickness, system=system)
@@ -210,9 +218,7 @@ def wasabiti_gre_centric_kernel(
                 rf_phase = divmod(rf_phase + rf_inc, 360.0)[1]
 
             # calculate phase encoding gradient for current phase encoding step
-            gy_pre = pp.make_trapezoid(
-                channel='y', area=pe_idx * delta_k, duration=pp.calc_duration(gzr, gx_pre), system=system
-            )
+            gy_pre = pp.scale_grad(gy_pre_max, (pe_idx - n_phase_encoding / 2) / (n_phase_encoding / 2))
 
             # add slice-selective rf pulse
             seq.add_block(rf, gz)
@@ -224,10 +230,13 @@ def wasabiti_gre_centric_kernel(
             seq.add_block(gx, adc, pe_label, rep_label)
 
             # add x and y re-winder and spoiler gradient in z-direction
-            gy_post = pp.make_trapezoid(
-                channel='y', amplitude=-gy_pre.amplitude, rise_time=gy_pre.rise_time, flat_time=gy_pre.flat_time
-            )
-            seq.add_block(gx_post, gy_post, gz_spoil)
+            seq.add_block(gx_post, pp.scale_grad(gy_pre, -1), gz_spoil)
+
+    # obtain noise samples
+    seq.add_block(pp.make_label(label='LIN', type='SET', value=0), pp.make_label(label='REP', type='SET', value=0))
+    seq.add_block(adc, pp.make_label(label='NOISE', type='SET', value=True))
+    seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))
+    seq.add_block(pp.make_delay(system.rf_dead_time))
 
     # write all required parameters in the seq-file header/definitions
     seq.set_definition('FOV', [fov_xy, fov_xy, slice_thickness])
@@ -313,6 +322,7 @@ def main(
 
     # define ADC and gradient timing
     n_readout_with_oversampling = int(n_readout * readout_oversampling)
+    gx_pre_duration = 1.0e-3  # duration of readout pre-winder gradient [s]
     adc_dwell_time = round_to_raster(
         1.0 / (receiver_bandwidth_per_pixel * n_readout_with_oversampling), system.adc_raster_time
     )
@@ -336,6 +346,7 @@ def main(
         fov_xy=fov_xy,
         n_readout=n_readout,
         readout_oversampling=readout_oversampling,
+        gx_pre_duration=gx_pre_duration,
         n_phase_encoding=n_phase_encoding,
         slice_thickness=slice_thickness,
         rf_prep_duration=rf_prep_duration,
