@@ -35,6 +35,8 @@ def wasabiti_gre_centric_kernel(
     rf_spoiling_inc: float,
     adc_dwell_time: float,
     sat_pulse_max_b1: float,
+    gz_spoil_duration: float,
+    gz_spoil_area: float,
 ) -> pp.Sequence:
     """Generate a WASABI sequence for simultaneous B0 and B1 mapping using a centric-out cartesian GRE readout.
 
@@ -80,6 +82,10 @@ def wasabiti_gre_centric_kernel(
         Dwell time of ADC.
     sat_pulse_max_b1
         Maximum B1 field amplitude of adiabatic saturation pulse (in µT)
+    gz_spoil_duration
+        Duration of spoiler gradient (in seconds).
+    gz_spoil_area
+        Area of spoiler gradient (in 1/meters = Hz/m * s).
 
     Returns
     -------
@@ -157,10 +163,10 @@ def wasabiti_gre_centric_kernel(
     )
 
     # create readout spoiler gradient
-    gz_spoil = pp.make_trapezoid(channel='z', area=4 / slice_thickness, system=system)
+    gz_spoil = pp.make_trapezoid(channel='z', system=system, area=gz_spoil_area, duration=gz_spoil_duration)
 
     # create post preparation spoiler gradient
-    prep_spoil = pp.make_trapezoid(channel='z', area=5 * gz_spoil.area, system=system)
+    prep_spoil = pp.make_trapezoid(channel='z', area=5 * gz_spoil.area, system=system, duration=5 * gz_spoil_duration)
 
     # calculate minimum echo time - only for sequence definitions
     min_te = (
@@ -330,6 +336,10 @@ def main(
         n_readout_with_oversampling, adc_dwell_time, system.grad_raster_time, system.adc_raster_time
     )
 
+    # define spoiling
+    gz_spoil_duration = 0.8e-3  # duration of spoiler gradient [s]
+    gz_spoil_area = 4 / slice_thickness  # area / zeroth gradient moment of spoiler gradient
+
     # WASABI block pulse
     rf_prep_duration = 5e-3
     rf_prep_amplitude = 3.75
@@ -358,6 +368,8 @@ def main(
         rf_spoiling_inc=rf_spoiling_inc,
         adc_dwell_time=adc_dwell_time,
         sat_pulse_max_b1=sat_pulse_max_b1,
+        gz_spoil_area=gz_spoil_area,
+        gz_spoil_duration=gz_spoil_duration,
     )
 
     # check timing of the sequence
