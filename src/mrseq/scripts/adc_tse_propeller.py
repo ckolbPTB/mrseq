@@ -36,6 +36,9 @@ def adc_tse_propeller_kernel(
     gz_crusher_duration: float,
     gz_crusher_area: float,
     ge_segment_delay: float,
+    g_diff_amplitude: Sequence[float],
+    g_diff_duration: float,
+    g_diff_delta_time: float,
     mrd_header_file: str | Path | None,
 ) -> tuple[pp.Sequence, float]:
     """Generate a PROPELLER turbo-spin echo sequence for ADC mapping..
@@ -80,6 +83,12 @@ def adc_tse_propeller_kernel(
         Duration of the crusher gradients applied around the 180° pulse.
     gz_crusher_area
         Area (zeroth gradient moment) of the crusher gradients applied around the 180° pulse.
+    g_diff_amplitude
+        Amplitudes of diffusion gradient for different b-values.
+    g_diff_duration
+        Duration of diffusion gradient.
+    g_diff_delta_time
+        Time between beginning of first and second diffusion gradient.
     ge_segment_delay
         Delay time at the end of each segment for GE scanners.
     mrd_header_file
@@ -260,76 +269,81 @@ def adc_tse_propeller_kernel(
     pe_idx = pe_idx[np.argsort(np.abs(pe_idx), kind='stable')]
 
     # add all events to the sequence
-    for se in range(n_slice_encoding):
-        se_label = pp.make_label(type='SET', label='PAR', value=int(se))
+    for dw in range(len(g_diff_amplitude)):
+        dw_label = pp.make_label(type='SET', label='ECO', value=int(dw))
+        for se in range(n_slice_encoding):
+            se_label = pp.make_label(type='SET', label='PAR', value=int(se))
 
-        # phase encoding along se
-        gz_pre = pp.scale_grad(gz_pre_max, (se - n_slice_encoding / 2) / (n_slice_encoding / 2))
+            # phase encoding along se
+            gz_pre = pp.scale_grad(gz_pre_max, (se - n_slice_encoding / 2) / (n_slice_encoding / 2))
 
-        for blade in range(n_blades):
-            _start_time_tr_block = sum(seq.block_durations.values())
+            for blade in range(n_blades):
+                _start_time_tr_block = sum(seq.block_durations.values())
 
-            # calculate rotation angle for the current spoke
-            rotation_angle_rad = np.pi / n_blades * blade  # + np.pi / 13
+                # calculate rotation angle for the current spoke
+                rotation_angle_rad = np.pi / n_blades * blade  # + np.pi / 13
 
-            # add excitation pulse
-            seq.add_block(rf_ex, gz_ex, pp.make_label(type='SET', label='TRID', value=1))
-            seq.add_block(gzr_ex)
-            seq.add_block(pp.make_delay(tau1))
+                if g_diff_amplitude[dw] == 0:
+                    # add excitation pulse
+                    seq.add_block(rf_ex, gz_ex, pp.make_label(type='SET', label='TRID', value=1))
+                    seq.add_block(gzr_ex)
+                    seq.add_block(pp.make_delay(tau1))
+                else:
+                    raise ValueError('Diff missing')
 
-            for echo in range(n_echoes):
-                pe_label = pp.make_label(type='SET', label='LIN', value=int(blade * n_echoes + echo))
+                for echo in range(n_echoes):
+                    pe_label = pp.make_label(type='SET', label='LIN', value=int(blade * n_echoes + echo))
 
-                # phase encoding along pe
-                pe_step = pe_idx[echo]
-                gy_pre = pp.scale_grad(gy_pre_max, pe_step / (n_echoes / 2))
+                    # phase encoding along pe
+                    pe_step = pe_idx[echo]
+                    gy_pre = pp.scale_grad(gy_pre_max, pe_step / (n_echoes / 2))
 
-                # add refocusing pulse with crusher gradients
-                seq.add_block(gz_crush)
-                seq.add_block(rf_ref, gz_ref)
-                seq.add_block(gz_crush)
+                    # add refocusing pulse with crusher gradients
+                    seq.add_block(gz_crush)
+                    seq.add_block(rf_ref, gz_ref)
+                    seq.add_block(gz_crush)
 
-                seq.add_block(pp.make_delay(tau2))
+                    seq.add_block(pp.make_delay(tau2))
 
-                # add pre gradients and all labels
-                labels = [se_label, pe_label]
-                seq.add_block(*pp.rotate(gx_pre, gy_pre, angle=rotation_angle_rad, axis='z'), gz_pre)
+                    # add pre gradients and all labels
+                    labels = [se_label, pe_label, dw_label]
+                    seq.add_block(*pp.rotate(gx_pre, gy_pre, angle=rotation_angle_rad, axis='z'), gz_pre)
 
-                # readout gradient and adc
-                seq.add_block(*pp.rotate(gx, angle=rotation_angle_rad, axis='z'), adc, *labels)
+                    # readout gradient and adc
+                    seq.add_block(*pp.rotate(gx, angle=rotation_angle_rad, axis='z'), adc, *labels)
 
-                # rewind gradients
-                seq.add_block(
-                    *pp.rotate(gx_post, pp.scale_grad(gy_pre, -1), angle=rotation_angle_rad, axis='z'),
-                    pp.scale_grad(gz_pre, -1),
-                )
-
-                if echo < n_echoes - 1:
-                    seq.add_block(pp.make_delay(tau3))
-
-                if mrd_header_file:
-                    # add acquisitions to metadata
-                    k_line = np.linspace(
-                        -n_readout_with_oversampling // 2,
-                        (n_readout_with_oversampling // 2) - 1,
-                        n_readout_with_oversampling,
+                    # rewind gradients
+                    seq.add_block(
+                        *pp.rotate(gx_post, pp.scale_grad(gy_pre, -1), angle=rotation_angle_rad, axis='z'),
+                        pp.scale_grad(gz_pre, -1),
                     )
-                    trajectory = np.zeros((n_readout_with_oversampling, 3), dtype=np.float32)
 
-                    trajectory[:, 0] = k_line * np.cos(rotation_angle_rad) - pe_step * np.sin(rotation_angle_rad)
-                    trajectory[:, 1] = k_line * np.sin(rotation_angle_rad) + pe_step * np.cos(rotation_angle_rad)
-                    trajectory[:, 2] = se - n_slice_encoding / 2
+                    if echo < n_echoes - 1:
+                        seq.add_block(pp.make_delay(tau3))
 
-                    acq = ismrmrd.Acquisition()
-                    acq.resize(trajectory_dimensions=3, number_of_samples=adc.num_samples)
-                    acq.traj[:] = trajectory
-                    prot.append_acquisition(acq)
+                    if mrd_header_file:
+                        # add acquisitions to metadata
+                        k_line = np.linspace(
+                            -n_readout_with_oversampling // 2,
+                            (n_readout_with_oversampling // 2) - 1,
+                            n_readout_with_oversampling,
+                        )
+                        trajectory = np.zeros((n_readout_with_oversampling, 3), dtype=np.float32)
 
-            duration_tr_block = sum(seq.block_durations.values()) - _start_time_tr_block
-            tr_delay = round_to_raster(tr - duration_tr_block - ge_segment_delay, system.block_duration_raster)
-            if tr_delay < 0:
-                raise ValueError('Desired TR too short for given sequence parameters.')
-            seq.add_block(pp.make_delay(tr_delay))
+                        trajectory[:, 0] = k_line * np.cos(rotation_angle_rad) - pe_step * np.sin(rotation_angle_rad)
+                        trajectory[:, 1] = k_line * np.sin(rotation_angle_rad) + pe_step * np.cos(rotation_angle_rad)
+                        trajectory[:, 2] = se - n_slice_encoding / 2
+
+                        acq = ismrmrd.Acquisition()
+                        acq.resize(trajectory_dimensions=3, number_of_samples=adc.num_samples)
+                        acq.traj[:] = trajectory
+                        prot.append_acquisition(acq)
+
+                duration_tr_block = sum(seq.block_durations.values()) - _start_time_tr_block
+                tr_delay = round_to_raster(tr - duration_tr_block - ge_segment_delay, system.block_duration_raster)
+                if tr_delay < 0:
+                    raise ValueError('Desired TR too short for given sequence parameters.')
+                seq.add_block(pp.make_delay(tr_delay))
 
     # obtain noise samples
     seq.add_block(
@@ -362,7 +376,8 @@ def main(
     fov_z: float = 80e-3,
     n_readout: int = 128,
     n_phase_encoding: int = 128,
-    n_slice_encoding=10,
+    n_slice_encoding: int = 10,
+    b_values: float | Sequence[float] = 0,
     show_plots: bool = True,
     test_report: bool = True,
     timing_check: bool = True,
@@ -390,6 +405,8 @@ def main(
         Number of phase encoding steps.
     n_slice_encoding
         Number of phase encoding steps along the slice direction.
+    b_values
+        b-values for diffusion weighting gradients in s/mm^2
     show_plots
         Toggles sequence plot.
     test_report
@@ -401,6 +418,9 @@ def main(
     """
     if system is None:
         system = sys_defaults
+
+    if b_values is float:
+        b_values = (b_values,)
 
     # define ADC and gradient timing
     readout_oversampling = 2
@@ -416,6 +436,14 @@ def main(
     rf_ex_bwt = 4  # bandwidth-time product of rf excitation pulse [Hz*s]
 
     rf_ref_width_scale_factor = 3.5  # width of refocusing pulse is increased compared to excitation pulse
+
+    # diffusion gradients
+    g_diff_delta_time = 5.5e-3
+    g_diff_duration = 1e-3
+    g_diff_amplitude = [
+        np.sqrt(b * 1e6 / ((2 * np.pi) ** 2 * g_diff_duration**2 * (g_diff_delta_time - g_diff_duration / 3)))
+        for b in b_values
+    ]
 
     # define sequence filename
     filename = f'{Path(__file__).stem}_{int(fov_xy * 1000)}fov_xy_{int(fov_z * 1000)}_fov_z_'
@@ -448,6 +476,9 @@ def main(
         readout_oversampling=readout_oversampling,
         gz_crusher_duration=gz_crusher_duration,
         gz_crusher_area=gz_crusher_area,
+        g_diff_amplitude=g_diff_amplitude,
+        g_diff_duration=g_diff_duration,
+        g_diff_delta_time=g_diff_delta_time,
         ge_segment_delay=0.0,
         mrd_header_file=output_path / Path(filename + '_header.h5'),
     )
