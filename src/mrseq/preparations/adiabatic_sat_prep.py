@@ -66,7 +66,10 @@ def add_adia_sat_block(
     hypsec_90 = make_hypsec_90(amp=max_b1, system=system)
 
     for i in range(n_pulses):
-        seq.add_block(hypsec_90)
+        if i == 0:
+            seq.add_block(hypsec_90, pp.make_label(type='SET', label='TRID', value=1060))
+        else:
+            seq.add_block(hypsec_90)
         if i % 3 == 0:
             seq.add_block(gx_spoil0, gy_spoil1, gz_spoil2)
         elif i % 2 == 0:

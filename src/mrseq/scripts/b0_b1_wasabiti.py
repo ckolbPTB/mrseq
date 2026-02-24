@@ -191,7 +191,7 @@ def wasabiti_gre_centric_kernel(
 
         # update frequency offset of WASABI block pulse and add it to sequence
         rf_prep.freq_offset = freq_offset_hz
-        seq.add_block(rf_prep)
+        seq.add_block(rf_prep, gz, pp.make_label(type='SET', label='TRID', value=77))
 
         # add post prep spoiler gradient
         seq.add_block(prep_spoil)
@@ -219,7 +219,7 @@ def wasabiti_gre_centric_kernel(
             )
 
             # add slice-selective rf pulse
-            seq.add_block(rf, gz)
+            seq.add_block(rf, gz, pp.make_label(type='SET', label='TRID', value=1))
 
             # add slice-selection rewinder and readout pre-winder
             seq.add_block(gzr, gx_pre, gy_pre)

@@ -282,7 +282,7 @@ def adc_tse_propeller_kernel(
                 _start_time_tr_block = sum(seq.block_durations.values())
 
                 # calculate rotation angle for the current spoke
-                rotation_angle_rad = np.pi / n_blades * blade  # + np.pi / 13
+                rotation_angle_rad = np.pi / n_blades * blade + np.pi / 13
 
                 if g_diff_amplitude[dw] == 0:
                     # add excitation pulse
@@ -420,7 +420,7 @@ def main(
     if system is None:
         system = sys_defaults
 
-    if b_values is float:
+    if isinstance(b_values, float):
         b_values = (b_values,)
 
     # define ADC and gradient timing
