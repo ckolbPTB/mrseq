@@ -103,6 +103,12 @@ def epi2d_se_kernel(
     # create PyPulseq Sequence object and set system limits
     seq = pp.Sequence(system=system)
 
+    # define number of navigator acquisitions
+    n_navigator_acq = 3 if add_navigator_acq else 0
+
+    # define number of noise acquisitions
+    n_noise_acq = 1 if add_noise_acq else 0
+
     # create EpiReadout object
     epi2d = EpiReadout(
         system=system,
@@ -294,7 +300,7 @@ def epi2d_se_kernel(
             gx_pre = pp.scale_grad(gx_pre, -1)
 
             # add 3 navigator acquisitions
-            for n in range(3):
+            for n in range(n_navigator_acq):
                 seq.add_block(
                     gx,
                     epi2d.adc,
@@ -337,20 +343,17 @@ def epi2d_se_kernel(
     # calculate k-space trajectory from Sequence to add this info to mrd file
     k_traj_adc, _, _, _, _ = seq.calculate_kspace()
     samples_per_acq = epi2d.adc.num_samples
-    number_of_total_acq = k_traj_adc.shape[-1] // samples_per_acq
-    number_of_epi_acq = epi2d.n_phase_enc_total
-    if 'data' in prot._dataset:
-        number_of_noise_acq = prot.number_of_acquisitions()
-    else:
-        number_of_noise_acq = 0
+    n_total_acq = k_traj_adc.shape[-1] // samples_per_acq
+    n_epi_acq_per_slice = epi2d.n_phase_enc_total
 
-    if not number_of_epi_acq + number_of_noise_acq == number_of_total_acq:
-        raise (ValueError('Number of calculated acquisitions does not match expected number.'))
+    if not (n_epi_acq_per_slice + n_navigator_acq) * n_slices + n_noise_acq == n_total_acq:
+        raise ValueError('Number of calculated acquisitions does not match expected number.')
 
-    k_traj_adc_readout = k_traj_adc[:, number_of_noise_acq * samples_per_acq :]
+    # remove noise acquisitions from k-space trajectory
+    k_traj_adc_readout = k_traj_adc[:, n_noise_acq * samples_per_acq :]
 
-    # create mrd acquisition and add trajectory info for each EPI readout
-    for n in range(number_of_epi_acq):
+    # create mrd acquisition and add trajectory info for each EPI readout including navigator acquisitions
+    for n in range((n_epi_acq_per_slice + n_navigator_acq) * n_slices):
         start = n * samples_per_acq
         end = start + samples_per_acq
 
@@ -399,13 +402,13 @@ def main(
     fov: float = 200e-3,
     n_readout: int = 64,
     n_phase_encoding: int = 64,
-    n_slices: int = 1,
+    n_slices: int = 3,
     slice_thickness: float = 8e-3,
     bandwidth: float = 100e3,
     readout_type: Literal['symmetric', 'flyback'] = 'symmetric',
     oversampling: Literal[1, 2, 4] = 2,
     ramp_sampling: bool = True,
-    partial_fourier_factor: float = 0.7,
+    partial_fourier_factor: float = 1.0,
     add_navigator_acq: bool = True,
     add_noise_acq: bool = True,
     show_plots: bool = True,
