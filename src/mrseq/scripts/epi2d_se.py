@@ -21,7 +21,7 @@ def epi2d_se_kernel(
     system: pp.Opts,
     te: float | None,
     tr: float | None,
-    fov: float,
+    fov_xy: float,
     n_readout: int,
     n_phase_encoding: int,
     bandwidth: float,
@@ -32,7 +32,7 @@ def epi2d_se_kernel(
     rf_bwt: float,
     rf_apodization: float,
     readout_type: Literal['symmetric', 'flyback'],
-    oversampling: Literal[1, 2, 4],
+    readout_oversampling: Literal[1, 2, 4],
     ramp_sampling: bool,
     partial_fourier_factor: float,
     add_spoiler: bool,
@@ -50,7 +50,7 @@ def epi2d_se_kernel(
         Desired echo time (TE) (in seconds). Minimum echo time is used if set to None.
     tr
         Desired repetition time (TR) (in seconds).
-    fov
+    fov_xy
         Field of view in x and y direction (in meters).
     n_readout
         Number of frequency encoding steps.
@@ -72,7 +72,7 @@ def epi2d_se_kernel(
         Apodization factor of rf excitation pulse
     readout_type
         Readout type ('symmetric' or 'flyback').
-    oversampling
+    readout_oversampling
         Readout oversampling factor. Can be 1 (no oversampling), 2, or 4.
     ramp_sampling
         If True, ADC is active during gradient ramps for optimized timing.
@@ -112,11 +112,11 @@ def epi2d_se_kernel(
     # create EpiReadout object
     epi2d = EpiReadout(
         system=system,
-        fov=fov,
+        fov=fov_xy,
         n_readout=n_readout,
         n_phase_encoding=n_phase_encoding,
         bandwidth=bandwidth,
-        oversampling=oversampling,
+        oversampling=readout_oversampling,
         readout_type=readout_type,
         ramp_sampling=ramp_sampling,
         partial_fourier_factor=partial_fourier_factor,
@@ -240,9 +240,9 @@ def epi2d_se_kernel(
     if mrd_header_file:
         hdr = create_header(
             traj_type='other',
-            encoding_fov=Fov(x=fov * oversampling, y=fov, z=slice_thickness),
-            recon_fov=Fov(x=fov, y=fov, z=slice_thickness),
-            encoding_matrix=MatrixSize(n_x=n_readout, n_y=epi2d.n_phase_encoding, n_z=1),
+            encoding_fov=Fov(x=fov_xy * readout_oversampling, y=fov_xy, z=slice_thickness),
+            recon_fov=Fov(x=fov_xy, y=fov_xy, z=slice_thickness),
+            encoding_matrix=MatrixSize(n_x=n_readout * readout_oversampling, n_y=epi2d.n_phase_encoding, n_z=1),
             recon_matrix=MatrixSize(n_x=n_readout, n_y=n_phase_encoding, n_z=1),
             dwell_time=epi2d.adc.dwell,
             slice_limits=Limits(min=0, max=n_slices, center=n_slices // 2),
@@ -266,11 +266,6 @@ def epi2d_se_kernel(
         )
         seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))
         seq.add_block(pp.make_delay(system.rf_dead_time))
-
-        if mrd_header_file:
-            acq = ismrmrd.Acquisition()
-            acq.resize(trajectory_dimensions=2, number_of_samples=epi2d.adc.num_samples)
-            prot.append_acquisition(acq)
 
     for slice_ in range(n_slices):
         # define slice label
@@ -309,11 +304,6 @@ def epi2d_se_kernel(
                     pp.make_label(label='AVG', type='SET', value=(n + 1) == 3),
                 )
                 gx = pp.scale_grad(gx, -1)
-                # add navigator acquisitions to ISMRMRD file
-                if mrd_header_file:
-                    acq = ismrmrd.Acquisition()
-                    acq.resize(trajectory_dimensions=2, number_of_samples=epi2d.adc.num_samples)
-                    prot.append_acquisition(acq)
 
             # add gy_pre and reset labels
             seq.add_block(
@@ -349,17 +339,14 @@ def epi2d_se_kernel(
     if not (n_epi_acq_per_slice + n_navigator_acq) * n_slices + n_noise_acq == n_total_acq:
         raise ValueError('Number of calculated acquisitions does not match expected number.')
 
-    # remove noise acquisitions from k-space trajectory
-    k_traj_adc_readout = k_traj_adc[:, n_noise_acq * samples_per_acq :]
-
-    # create mrd acquisition and add trajectory info for each EPI readout including navigator acquisitions
-    for n in range((n_epi_acq_per_slice + n_navigator_acq) * n_slices):
+    # create mrd acquisition and add trajectory info for each EPI readout including navigator and noise acquisitions
+    for n in range((n_epi_acq_per_slice + n_navigator_acq) * n_slices + n_noise_acq):
         start = n * samples_per_acq
         end = start + samples_per_acq
 
         traj = np.zeros((samples_per_acq, 2), dtype=np.float32)
-        traj[:, 0] = np.round(k_traj_adc_readout[0, start:end] * fov, 3)
-        traj[:, 1] = np.round(k_traj_adc_readout[1, start:end] * fov, 3)
+        traj[:, 0] = np.round(k_traj_adc[0, start:end] * fov_xy * readout_oversampling, 3)
+        traj[:, 1] = np.round(k_traj_adc[1, start:end] * fov_xy, 3)
 
         acq = ismrmrd.Acquisition()
         acq.resize(trajectory_dimensions=2, number_of_samples=samples_per_acq)
@@ -381,32 +368,32 @@ def epi2d_se_kernel(
             epi2d.adc.num_samples * epi2d.adc.dwell,
         ]
 
-        seq.set_definition(key='TargetGriddedSamples', value=n_readout * oversampling)
+        seq.set_definition(key='TargetGriddedSamples', value=n_readout * readout_oversampling)
         seq.set_definition(key='TrapezoidGriddingParameters', value=gridding_params)
 
     # write all required parameters in the seq-file header/definitions
-    seq.set_definition('FOV', [fov, fov, slice_thickness * n_slices])
+    seq.set_definition('FOV', [fov_xy, fov_xy, slice_thickness * n_slices])
     seq.set_definition('ReconMatrix', (n_readout, n_phase_encoding, n_slices))
     seq.set_definition('SliceThickness', slice_thickness)
     seq.set_definition('TE', float(t_exc_to_ref + t_ref_to_kcenter))
     seq.set_definition('TR', tr or float(min_tr))
-    seq.set_definition('ReadoutOversamplingFactor', oversampling)
+    seq.set_definition('ReadoutOversamplingFactor', readout_oversampling)
 
-    return seq, min_te, min_tr
+    return seq, float(min_te), float(min_tr)
 
 
 def main(
     system: pp.Opts | None = None,
     te: float | None = None,
     tr: float | None = None,
-    fov: float = 200e-3,
+    fov_xy: float = 200e-3,
     n_readout: int = 64,
     n_phase_encoding: int = 64,
     n_slices: int = 3,
     slice_thickness: float = 8e-3,
     bandwidth: float = 100e3,
     readout_type: Literal['symmetric', 'flyback'] = 'symmetric',
-    oversampling: Literal[1, 2, 4] = 2,
+    readout_oversampling: Literal[1, 2, 4] = 2,
     ramp_sampling: bool = True,
     partial_fourier_factor: float = 1.0,
     add_navigator_acq: bool = True,
@@ -425,7 +412,7 @@ def main(
         Desired echo time (TE) (in seconds). Minimum echo time is used if set to None.
     tr
         Desired repetition time (TR) (in seconds). Minimum repetition time is used if set to None.
-    fov
+    fov_xy
         Field of view in x and y direction (in meters).
     n_readout
         Number of frequency encoding steps.
@@ -439,7 +426,7 @@ def main(
         Total receiver bandwidth (in Hz).
     readout_type
         Readout type ('symmetric' or 'flyback').
-    oversampling
+    readout_oversampling
         Readout oversampling factor. Can be 1 (no oversampling), 2, or 4.
     ramp_sampling
         If True, ADC is active during gradient ramps for optimized timing.
@@ -482,8 +469,8 @@ def main(
     noise_string = 'withnoise' if add_noise_acq else 'nonoise'  # noise acquisition
     nav_string = 'withnav' if add_navigator_acq else 'nonav'  # navigator acquisition
 
-    filename = f'{Path(__file__).stem}_{int(fov * 1000)}fov_{n_readout}px'
-    filename += f'_{readout_string}_se_{oversampling}ro_{rs_string}_{pf_string}'
+    filename = f'{Path(__file__).stem}_{int(fov_xy * 1000)}fov_{n_readout}px'
+    filename += f'_{readout_string}_se_{readout_oversampling}ro_{rs_string}_{pf_string}'
     filename += f'_{noise_string}_{nav_string}'
 
     output_path = Path.cwd() / 'output'
@@ -499,11 +486,11 @@ def main(
         system=system,
         te=te,
         tr=tr,
-        fov=fov,
+        fov_xy=fov_xy,
         n_readout=n_readout,
         n_phase_encoding=n_phase_encoding,
         bandwidth=bandwidth,
-        oversampling=oversampling,
+        readout_oversampling=readout_oversampling,
         slice_thickness=slice_thickness,
         n_slices=n_slices,
         rf_duration=rf_duration,
