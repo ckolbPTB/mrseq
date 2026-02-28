@@ -714,11 +714,7 @@ class EpiReadout:
         # recalculate the actual partial fourier factor
         actual_pf_factor = self.n_phase_enc_total / self.n_phase_encoding
         if actual_pf_factor != partial_fourier_factor:
-            warnings.warn(
-                f'Desired partial Fourier factor {partial_fourier_factor} adjusted to {actual_pf_factor}.',
-                UserWarning,
-                stacklevel=2,
-            )
+            print(f'Adjusted partial Fourier factor from {partial_fourier_factor} to {actual_pf_factor:.2f}.')
             self.partial_fourier_factor = actual_pf_factor
 
         # Create pre-phaser gradients
