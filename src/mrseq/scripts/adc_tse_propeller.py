@@ -149,8 +149,8 @@ def adc_tse_propeller_kernel(
 
     n_blades = n_phase_encoding // n_echoes
 
-    # phase encoding gradient
-    gy_pre_max = pp.make_trapezoid(channel='y', area=delta_k * n_echoes / 2, duration=gx_pre_duration, system=system)
+    # phase encoding gradient prepared similar to the readout to ensure it can be "mixed" when rotating
+    gy_pre_max = pp.make_trapezoid(channel='y', area=delta_k * n_readout / 2, duration=gx_pre_duration, system=system)
 
     # slice encoding gradient
     gz_pre_max = pp.make_trapezoid(
@@ -297,7 +297,7 @@ def adc_tse_propeller_kernel(
 
                     # phase encoding along pe
                     pe_step = pe_idx[echo]
-                    gy_pre = pp.scale_grad(gy_pre_max, pe_step / (n_echoes / 2))
+                    gy_pre = pp.scale_grad(gy_pre_max, pe_step / (n_readout / 2))
 
                     # add refocusing pulse with crusher gradients
                     seq.add_block(gz_crush)
@@ -441,12 +441,13 @@ def main(
     # diffusion gradients
     g_diff_delta_time = 5.5e-3
     g_diff_duration = 1e-3
-    g_diff_amplitude = np.asarray(
-        [
-            np.sqrt(b * 1e6 / ((2 * np.pi) ** 2 * g_diff_duration**2 * (g_diff_delta_time - g_diff_duration / 3)))
-            for b in b_values
-        ]
-    )
+    g_diff_amplitude = (0,)
+    # np.asarray(
+    #    [
+    #        np.sqrt(b * 1e6 / ((2 * np.pi) ** 2 * g_diff_duration**2 * (g_diff_delta_time - g_diff_duration / 3)))
+    #        for b in b_values
+    #    ]
+    # )
 
     # define sequence filename
     filename = f'{Path(__file__).stem}_{int(fov_xy * 1000)}fov_xy_{int(fov_z * 1000)}_fov_z_'

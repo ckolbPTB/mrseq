@@ -30,6 +30,7 @@ def t1_t2_spiral_cmrf_kernel(
     readout_oversampling: Literal[1, 2, 4],
     spiral_undersampling: int,
     slice_thickness: float,
+    g_spiral_rew_slew_rate_scaling: float,
     rf_inv_duration: float,
     rf_inv_spoil_risetime: float,
     rf_inv_spoil_flattime: float,
@@ -66,6 +67,8 @@ def t1_t2_spiral_cmrf_kernel(
         Undersampling in the periphery of the variable density spiral.
     slice_thickness
         Slice thickness of the 2D slice (in meters).
+    g_spiral_rew_slew_rate_scaling
+        Scaling of max slew rate for rewinder of spiral readout gradient
     rf_inv_duration
         Duration of adiabatic inversion pulse (in seconds)
     rf_inv_spoil_risetime
@@ -151,6 +154,7 @@ def t1_t2_spiral_cmrf_kernel(
         n_spirals=None,
         max_pre_duration=0.0,
         spiral_type='out',
+        g_rew_slew_rate_scaling=g_spiral_rew_slew_rate_scaling,
     )
     delta_array = 2 * np.pi / len(gx) * np.arange(len(gx))  # angle difference between subsequent spirals
     max_spiral_duration = max(pp.calc_duration(gx, gy) for gx, gy in zip(gx, gy, strict=True))
@@ -473,6 +477,7 @@ def main(
         readout_oversampling=readout_oversampling,
         spiral_undersampling=spiral_undersampling,
         slice_thickness=slice_thickness,
+        g_spiral_rew_slew_rate_scaling=1,
         rf_inv_duration=rf_inv_duration,
         rf_inv_spoil_risetime=rf_inv_spoil_risetime,
         rf_inv_spoil_flattime=rf_inv_spoil_flattime,

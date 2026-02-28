@@ -1,5 +1,6 @@
 """Basic functionality for trajectory calculation."""
 
+import copy
 import warnings
 from typing import Any
 from typing import Literal
@@ -365,6 +366,7 @@ def spiral_acquisition(
     n_spirals: int | None,
     max_pre_duration: float,
     spiral_type: Literal['out', 'in-out'],
+    g_rew_slew_rate_scaling: float,
 ) -> tuple[list[Any], list[Any], Any, np.ndarray, float]:
     """Generate a spiral acquisition sequence.
 
@@ -386,6 +388,8 @@ def spiral_acquisition(
         Maximum duration for pre-winder gradients (in seconds).
     spiral_type
         Type of spiral acquisition. 'out' for outward spirals, 'in-out' for spirals turning in and then out.
+    g_rew_slew_rate_scaling
+        Scaling of slew rate for refocus gradient
 
     Returns
     -------
@@ -400,6 +404,8 @@ def spiral_acquisition(
     time_to_echo
         Time to echo from beginning of gradients (in seconds).
     """
+    if g_rew_slew_rate_scaling > 1:
+        raise ValueError(f'Scaling of slew rate should be <= 1 and not {g_rew_slew_rate_scaling}')
     # calculate single spiral trajectory
     traj, grad, _s, _timing, _r, _theta, n_spirals_undersampling, fov_scaling_center, fov_scaling_edge = (
         undersampled_variable_density_spiral(system, n_readout, fov, undersampling_factor)
@@ -444,13 +450,15 @@ def spiral_acquisition(
     # Calculate pre- and re-winder gradients
     gx_rew, gx_pre, gy_rew, gy_pre = [], [], [], []
     for gx_, gy_ in zip(gx, gy, strict=True):
+        system_pre_rew = copy.deepcopy(system)
+        system_pre_rew.max_slew *= g_rew_slew_rate_scaling
         gx_rew.append(
             pp.make_extended_trapezoid_area(
                 area=-gx_.area if spiral_type == 'out' else -gx_.area / 2,
                 channel='x',
                 grad_start=gx_.last,
                 grad_end=0,
-                system=system,
+                system=system_pre_rew,
                 convert_to_arbitrary=True,
             )[0]
         )
@@ -460,7 +468,7 @@ def spiral_acquisition(
                 channel='y',
                 grad_start=gy_.last,
                 grad_end=0,
-                system=system,
+                system=system_pre_rew,
                 convert_to_arbitrary=True,
             )[0]
         )
@@ -472,7 +480,7 @@ def spiral_acquisition(
                     channel='x',
                     grad_start=0,
                     grad_end=gx_.first,
-                    system=system,
+                    system=system_pre_rew,
                     convert_to_arbitrary=True,
                 )[0]
             )
@@ -483,7 +491,7 @@ def spiral_acquisition(
                     channel='y',
                     grad_start=0,
                     grad_end=gy_.first,
-                    system=system,
+                    system=system_pre_rew,
                     convert_to_arbitrary=True,
                 )[0]
             )
