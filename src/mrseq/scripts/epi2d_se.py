@@ -10,11 +10,11 @@ import pypulseq as pp
 
 from mrseq.utils import round_to_raster
 from mrseq.utils import sys_defaults
+from mrseq.utils.EpiReadout import EpiReadout
 from mrseq.utils.ismrmrd import Fov
 from mrseq.utils.ismrmrd import Limits
 from mrseq.utils.ismrmrd import MatrixSize
 from mrseq.utils.ismrmrd import create_header
-from mrseq.utils.trajectory import EpiReadout
 
 
 def epi2d_se_kernel(
