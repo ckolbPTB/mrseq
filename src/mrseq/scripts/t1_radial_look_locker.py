@@ -256,7 +256,9 @@ def t1_radial_look_locker_kernel(
 
         # add delay in case TR > min_TR
         if tr_delay > 0:
-            seq.add_block(pp.make_delay(tr_delay - ge_segment_delay))
+            seq.add_block(
+                pp.make_delay(round_to_raster(tr_delay - ge_segment_delay, raster_time=system.block_duration_raster))
+            )
 
         if mrd_header_file:
             # add acquisitions to metadata
