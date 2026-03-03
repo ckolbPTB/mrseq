@@ -48,7 +48,7 @@ def test_mrd_trajectory(
     fov = 200e-3
     n_readout = 64
     n_phase_encoding = 64
-    oversampling = 2
+    oversampling: Literal[1, 2, 4] = 2
     n_slices = 1
 
     mrd_file = Path(tempfile.gettempdir()) / 'test_epi2d_fid_traj.h5'

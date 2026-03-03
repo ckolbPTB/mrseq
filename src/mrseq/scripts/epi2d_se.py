@@ -276,6 +276,7 @@ def epi2d_se_kernel(
 
         # Write noise trajectory to MRD (zero trajectory — no gradients active)
         if mrd_header_file:
+            assert prot is not None
             n_samples = epi2d.adc.num_samples
             acq = ismrmrd.Acquisition()
             acq.resize(trajectory_dimensions=2, number_of_samples=n_samples)
@@ -325,6 +326,7 @@ def epi2d_se_kernel(
 
                 # Write navigator trajectory to MRD
                 if mrd_header_file:
+                    assert prot is not None
                     n_samples = epi2d.adc.num_samples
                     traj = np.zeros((n_samples, 2), dtype=np.float32)
                     if nav_gx_sign > 0:
@@ -370,6 +372,7 @@ def epi2d_se_kernel(
 
     # close ISMRMRD file
     if mrd_header_file:
+        assert prot is not None
         prot.close()
 
     # set gridding definitions extracted from EpiReadout

@@ -414,6 +414,9 @@ class EpiReadout:
         # For symmetric EPI, compute per-sample ky offset from the blip waveforms.
         # tt is relative to the waveform start; add delay to get block-relative times.
         if self.readout_type == 'symmetric':
+            assert self.gy_blipup is not None
+            assert self.gy_blipdown is not None
+            assert self.gy_blipdownup is not None
             bu_tt = self.gy_blipup.tt + self.gy_blipup.delay
             bd_tt = self.gy_blipdown.tt + self.gy_blipdown.delay
             bdu_tt = self.gy_blipdownup.tt + self.gy_blipdownup.delay
