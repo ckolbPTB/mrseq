@@ -65,3 +65,60 @@ def test_epi_time_to_center(
     seq = pp.Sequence(system=system_defaults)
     seq, _ = epi2d.add_to_seq(seq, add_prephaser=False)
     assert sum(seq.block_durations.values()) == pytest.approx(epi2d.total_duration_without_prephaser, abs=1e-6)
+
+
+@pytest.mark.parametrize('fov', (64e-3, 128e-3))
+@pytest.mark.parametrize('n_readout', (32, 64))
+@pytest.mark.parametrize('n_phase_encoding', (32, 64))
+@pytest.mark.parametrize('bandwidth', (50e3, 40e3))
+@pytest.mark.parametrize('oversampling', (1, 2))
+@pytest.mark.parametrize('ramp_sampling', (True, False))
+@pytest.mark.parametrize('readout_type', ('flyback', 'symmetric'))
+@pytest.mark.parametrize('partial_fourier_factor', (0.75, 1.0))
+def test_epi_analytical_trajectory(
+    system_defaults: pp.Opts | None,
+    fov: float,
+    n_readout: int,
+    n_phase_encoding: int,
+    bandwidth: float,
+    oversampling: int,
+    ramp_sampling: bool,
+    readout_type: Literal['flyback', 'symmetric'],
+    partial_fourier_factor: float,
+):
+    """Test that the analytical trajectory matches calculate_kspace()."""
+    epi2d = EpiReadout(
+        system=system_defaults,
+        fov=fov,
+        n_readout=n_readout,
+        n_phase_encoding=n_phase_encoding,
+        bandwidth=bandwidth,
+        oversampling=oversampling,
+        readout_type=readout_type,
+        ramp_sampling=ramp_sampling,
+        partial_fourier_factor=partial_fourier_factor,
+        adc_freq_offset=0.0,
+        pe_enable=True,
+        spoiling_enable=True,
+    )
+
+    # Build sequence and get PyPulseq trajectory
+    seq = pp.Sequence(system=system_defaults)
+    seq, _ = epi2d.add_to_seq(seq)
+    k_traj_adc, _, _, _, _ = seq.calculate_kspace()
+
+    # Get analytical trajectory
+    kx_analytical, ky_analytical = epi2d.calculate_trajectory()
+
+    n_samples = epi2d.adc.num_samples
+    n_pe = epi2d.n_phase_enc_total
+
+    # The prephaser block has no ADC, so calculate_kspace ADC samples start at the first readout
+    for pe_idx in range(n_pe):
+        start = pe_idx * n_samples
+        end = start + n_samples
+        kx_pulseq = k_traj_adc[0, start:end]
+        ky_pulseq = k_traj_adc[1, start:end]
+
+        np.testing.assert_allclose(kx_analytical[pe_idx], kx_pulseq, atol=1e-9)
+        np.testing.assert_allclose(ky_analytical[pe_idx], ky_pulseq, atol=1e-9)

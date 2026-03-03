@@ -106,9 +106,6 @@ def epi2d_fid_kernel(
     # define number of navigator acquisitions
     n_navigator_acq = 3 if add_navigator_acq else 0
 
-    # define number of noise acquisitions
-    n_noise_acq = 1 if add_noise_acq else 0
-
     # create EpiReadout object
     epi2d = EpiReadout(
         system=system,
@@ -174,6 +171,7 @@ def epi2d_fid_kernel(
             raise ValueError(f'TR must be larger than {min_tr * 1000:.2f} ms. Current value is {tr * 1000:.3f} ms.')
 
     # create header
+    prot = None
     if mrd_header_file:
         hdr = create_header(
             traj_type='other',
@@ -191,6 +189,15 @@ def epi2d_fid_kernel(
         prot = ismrmrd.Dataset(mrd_header_file, 'w')
         prot.write_xml_header(hdr.toXML('utf-8'))
 
+    # Precompute analytical navigator trajectory (single kx line, no ky blip)
+    if add_navigator_acq:
+        from mrseq.utils.EpiReadout import _trapezoid_area_at_times
+
+        nav_sample_times = epi2d.adc.delay + (np.arange(epi2d.adc.num_samples) + 0.5) * epi2d.adc.dwell
+        nav_kx_forward = _trapezoid_area_at_times(
+            epi2d.gx.rise_time, epi2d.gx.flat_time, epi2d.gx.fall_time, abs(epi2d.gx.amplitude), nav_sample_times
+        )
+
     # obtain noise samples if selected
     if add_noise_acq:
         seq.add_block(
@@ -203,6 +210,15 @@ def epi2d_fid_kernel(
         )
         seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))
         seq.add_block(pp.make_delay(system.rf_dead_time))
+
+        # Write noise trajectory to MRD (zero trajectory — no gradients active)
+        if mrd_header_file:
+            assert prot is not None
+            n_samples = epi2d.adc.num_samples
+            acq = ismrmrd.Acquisition()
+            acq.resize(trajectory_dimensions=2, number_of_samples=n_samples)
+            acq.traj[:] = np.zeros((n_samples, 2), dtype=np.float32)
+            prot.append_acquisition(acq)
 
     for slice_ in range(n_slices):
         # define slice label
@@ -231,6 +247,10 @@ def epi2d_fid_kernel(
             # reverse gx_pre back after adding to sequence
             gx_pre = pp.scale_grad(gx_pre, -1)
 
+            # Navigator kx offset: starts from -gx_pre.area (reversed pre-winder)
+            nav_kx_offset = -epi2d.gx_pre.area
+            nav_gx_sign = -1.0  # first navigator uses reversed gx
+
             # add navigator scans for ghost correction
             for n in range(n_navigator_acq):
                 seq.add_block(
@@ -240,7 +260,26 @@ def epi2d_fid_kernel(
                     pp.make_label(label='SEG', type='SET', value=gx.amplitude < 0),
                     pp.make_label(label='AVG', type='SET', value=(n + 1) == 3),
                 )
+
+                # Write navigator trajectory to MRD
+                if mrd_header_file:
+                    assert prot is not None
+                    n_samples = epi2d.adc.num_samples
+                    traj = np.zeros((n_samples, 2), dtype=np.float32)
+                    if nav_gx_sign > 0:
+                        nav_kx = nav_kx_offset + nav_kx_forward
+                    else:
+                        nav_kx = nav_kx_offset - nav_kx_forward
+                    traj[:, 0] = nav_kx * fov_xy * readout_oversampling
+                    acq = ismrmrd.Acquisition()
+                    acq.resize(trajectory_dimensions=2, number_of_samples=n_samples)
+                    acq.traj[:] = traj
+                    prot.append_acquisition(acq)
+
+                # Update kx offset for next navigator (accumulate the signed gx area)
+                nav_kx_offset += nav_gx_sign * epi2d.gx.area
                 gx = pp.scale_grad(gx, -1)
+                nav_gx_sign = -nav_gx_sign
 
             # add echo time delay
             seq.add_block(pp.make_delay(te_delay))
@@ -260,40 +299,17 @@ def epi2d_fid_kernel(
             seq.add_block(gzr, gx_pre, gy_pre)
 
         # add EPI readout block without pre-phaser gradients
+        # (trajectory is written per-readout inside add_to_seq when mrd_dataset is provided)
         seq, prot = epi2d.add_to_seq(seq, add_prephaser=False, mrd_dataset=prot)
 
         # add repetition time delay
         if tr_delay > 0:
             seq.add_block(pp.make_delay(tr_delay))
 
+    # close ISMRMRD file
     if mrd_header_file:
-        # calculate k-space trajectory from Sequence to add this info to mrd file
-        k_traj_adc, _, _, _, _ = seq.calculate_kspace()
-        samples_per_acq = epi2d.adc.num_samples
-        n_total_acq = k_traj_adc.shape[-1] // samples_per_acq
-        n_epi_acq_per_slice = epi2d.n_phase_enc_total
-
-        if not (n_epi_acq_per_slice + n_navigator_acq) * n_slices + n_noise_acq == n_total_acq:
-            raise ValueError('Number of calculated acquisitions does not match expected number.')
-
-        # create mrd acquisition and add trajectory info for each EPI readout including navigator and noise acquisitions
-        for n in range((n_epi_acq_per_slice + n_navigator_acq) * n_slices + n_noise_acq):
-            start = n * samples_per_acq
-            end = start + samples_per_acq
-
-            traj = np.zeros((samples_per_acq, 2), dtype=np.float32)
-            traj[:, 0] = np.round(k_traj_adc[0, start:end] * fov_xy * readout_oversampling, 3)
-            traj[:, 1] = np.round(k_traj_adc[1, start:end] * fov_xy, 3)
-
-            acq = ismrmrd.Acquisition()
-            acq.resize(trajectory_dimensions=2, number_of_samples=samples_per_acq)
-            acq.traj[:] = traj
-
-            prot.append_acquisition(acq)
-
-        # close ISMRMRD file
-        if mrd_header_file:
-            prot.close()
+        assert prot is not None
+        prot.close()
 
     # set gridding definitions extracted from EpiReadout
     if ramp_sampling:
