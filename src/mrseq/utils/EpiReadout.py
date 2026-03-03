@@ -11,6 +11,99 @@ from mrseq.utils import round_to_raster
 from mrseq.utils import sys_defaults
 
 
+def _trapezoid_area_at_times(
+    rise_time: float,
+    flat_time: float,
+    fall_time: float,
+    amplitude: float,
+    sample_times: np.ndarray,
+) -> np.ndarray:
+    """Calculate accumulated gradient area analytically for a trapezoidal gradient.
+
+    Parameters
+    ----------
+    rise_time
+        Gradient rise time (in seconds).
+    flat_time
+        Gradient flat time (in seconds).
+    fall_time
+        Gradient fall time (in seconds).
+    amplitude
+        Gradient amplitude (in Hz/m).
+    sample_times
+        Array of time points (in seconds) relative to the start of the gradient.
+
+    Returns
+    -------
+    area
+        Accumulated gradient area at each sample time (in 1/m).
+    """
+    t1 = rise_time
+    t2 = rise_time + flat_time
+
+    area_at_t1 = amplitude * rise_time / 2
+    area_at_t2 = area_at_t1 + amplitude * flat_time
+
+    area = np.zeros_like(sample_times)
+    for i, t in enumerate(sample_times):
+        if t <= 0:
+            area[i] = 0.0
+        elif t <= t1:
+            area[i] = amplitude * t**2 / (2 * rise_time)
+        elif t <= t2:
+            area[i] = area_at_t1 + amplitude * (t - t1)
+        else:
+            dt = t - t2
+            area[i] = area_at_t2 + amplitude * dt - amplitude * dt**2 / (2 * fall_time)
+
+    return area
+
+
+def _piecewise_linear_area_at_times(
+    wf_times: np.ndarray,
+    wf_values: np.ndarray,
+    sample_times: np.ndarray,
+) -> np.ndarray:
+    """Compute cumulative integral of a piecewise-linear waveform at given sample times.
+
+    Parameters
+    ----------
+    wf_times
+        Time points of the piecewise-linear waveform (in seconds), sorted ascending.
+    wf_values
+        Waveform amplitude values at each time point (in Hz/m).
+    sample_times
+        Times at which to evaluate the cumulative area (in seconds).
+
+    Returns
+    -------
+    area
+        Cumulative area at each sample time (in 1/m).
+    """
+    n_knots = len(wf_times)
+    cum_area = np.zeros(n_knots)
+    for k in range(1, n_knots):
+        dt = wf_times[k] - wf_times[k - 1]
+        cum_area[k] = cum_area[k - 1] + (wf_values[k] + wf_values[k - 1]) / 2 * dt
+
+    area = np.zeros_like(sample_times)
+    for i, t in enumerate(sample_times):
+        if t <= wf_times[0]:
+            area[i] = 0.0
+        elif t >= wf_times[-1]:
+            area[i] = cum_area[-1]
+        else:
+            k = np.searchsorted(wf_times, t, side='right')
+            base_area = cum_area[k - 1]
+            dt_seg = wf_times[k] - wf_times[k - 1]
+            dt = t - wf_times[k - 1]
+            frac = dt / dt_seg
+            wf_at_t = wf_values[k - 1] + frac * (wf_values[k] - wf_values[k - 1])
+            area[i] = base_area + (wf_values[k - 1] + wf_at_t) / 2 * dt
+
+    return area
+
+
 class EpiReadout:
     """EPI readout module supporting flyback and symmetric readout, ramp sampling, oversampling, and partial Fourier.
 
@@ -288,15 +381,97 @@ class EpiReadout:
         """Return total duration of readout excluding pre-phasers but including optional spoiler."""
         return self.total_duration - pp.calc_duration(self.gx_pre, self.gy_pre)
 
+    def calculate_trajectory(self) -> tuple[np.ndarray, np.ndarray]:
+        """Compute analytical k-space trajectory for the EPI readout.
+
+        Returns the kx and ky positions at each ADC sample for each phase encoding line.
+        This replaces the need to call ``seq.calculate_kspace()`` for trajectory information.
+
+        Returns
+        -------
+        kx
+            kx trajectory in 1/m, shape ``(n_phase_enc_total, adc.num_samples)``.
+        ky
+            ky trajectory in 1/m, shape ``(n_phase_enc_total, adc.num_samples)``.
+        """
+        n_samples = self.adc.num_samples
+        n_pe = self.n_phase_enc_total
+
+        # ADC sample times relative to the start of the gradient block (center of each dwell)
+        sample_times = self.adc.delay + (np.arange(n_samples) + 0.5) * self.adc.dwell
+
+        # kx for a single readout line with positive gradient amplitude
+        kx_forward = _trapezoid_area_at_times(
+            self.gx.rise_time, self.gx.flat_time, self.gx.fall_time, abs(self.gx.amplitude), sample_times
+        )
+
+        # After gx_pre, kx starts at gx_pre.area
+        kx_offset = self.gx_pre.area
+
+        # ky: pre-phaser moves to top of k-space
+        ky_start = self.gy_pre.area
+
+        # For symmetric EPI, compute per-sample ky offset from the blip waveforms.
+        # tt is relative to the waveform start; add delay to get block-relative times.
+        if self.readout_type == 'symmetric':
+            bu_tt = self.gy_blipup.tt + self.gy_blipup.delay
+            bd_tt = self.gy_blipdown.tt + self.gy_blipdown.delay
+            bdu_tt = self.gy_blipdownup.tt + self.gy_blipdownup.delay
+
+            ky_offset_blipup = _piecewise_linear_area_at_times(bu_tt, self.gy_blipup.waveform, sample_times)
+            ky_offset_blipdown = _piecewise_linear_area_at_times(bd_tt, self.gy_blipdown.waveform, sample_times)
+            ky_offset_blipdownup = _piecewise_linear_area_at_times(bdu_tt, self.gy_blipdownup.waveform, sample_times)
+
+            blipup_total = _piecewise_linear_area_at_times(bu_tt, self.gy_blipup.waveform, np.array([bu_tt[-1]]))[0]
+            blipdownup_total = _piecewise_linear_area_at_times(
+                bdu_tt, self.gy_blipdownup.waveform, np.array([bdu_tt[-1]])
+            )[0]
+
+        kx = np.zeros((n_pe, n_samples))
+        ky = np.zeros((n_pe, n_samples))
+
+        # Track cumulative ky base (ky value at the START of each block)
+        ky_base = ky_start
+
+        for pe_idx in range(n_pe):
+            if self.readout_type == 'flyback':
+                kx[pe_idx, :] = kx_offset + kx_forward
+                ky[pe_idx, :] = ky_start + pe_idx * self.gy_blip.area
+
+            elif self.readout_type == 'symmetric':
+                if pe_idx % 2 == 0:
+                    kx[pe_idx, :] = kx_offset + kx_forward
+                else:
+                    kx[pe_idx, :] = kx_offset + self.gx.area - kx_forward
+
+                if pe_idx == 0:
+                    ky[pe_idx, :] = ky_base + ky_offset_blipup
+                    ky_base += blipup_total
+                elif pe_idx == n_pe - 1:
+                    ky[pe_idx, :] = ky_base + ky_offset_blipdown
+                else:
+                    ky[pe_idx, :] = ky_base + ky_offset_blipdownup
+                    ky_base += blipdownup_total
+
+        return kx, ky
+
     def add_to_seq(
         self,
         seq: pp.Sequence,
         add_prephaser: bool = True,
         mrd_dataset: ismrmrd.Dataset | None = None,
     ) -> tuple[pp.Sequence, ismrmrd.Dataset | None]:
-        """Add EPI readout blocks to the sequence."""
+        """Add EPI readout blocks to the sequence.
+
+        If `mrd_dataset` is provided, the analytical k-space trajectory is
+        computed and written to the MRD file for each readout line.
+        """
         # (Re)set phase encoding (LIN) label
         lin_label = pp.make_label(label='LIN', type='SET', value=0)
+
+        # Compute analytical trajectory for MRD writing
+        if mrd_dataset is not None:
+            kx_traj, ky_traj = self.calculate_trajectory()
 
         # Add pre-phaser gradients if enabled
         if add_prephaser:
@@ -323,6 +498,18 @@ class EpiReadout:
                 if pe_idx != self.n_phase_enc_total - 1:
                     seq.add_block(self.gx_flyback, self.gy_blip)
 
+            # Write per-readout trajectory to MRD
+            if mrd_dataset is not None:
+                n_samples = self.adc.num_samples
+                traj = np.zeros((n_samples, 2), dtype=np.float32)
+                traj[:, 0] = np.round(kx_traj[pe_idx] * self.fov * self.oversampling, 3)
+                traj[:, 1] = np.round(ky_traj[pe_idx] * self.fov, 3)
+
+                acq = ismrmrd.Acquisition()
+                acq.resize(trajectory_dimensions=2, number_of_samples=n_samples)
+                acq.traj[:] = traj
+                mrd_dataset.append_acquisition(acq)
+
             lin_label = pp.make_label(label='LIN', type='INC', value=1)
 
         if self.spoiling_enable:
@@ -341,27 +528,14 @@ class EpiReadout:
         plt.show()
 
     def plot_trajectory(self):
-        """Plot k-space trajectory."""
-        seq = pp.Sequence(self.system)
-        # add dummy excitation pulse for trajectory calculation
-        seq.add_block(
-            pp.make_block_pulse(
-                flip_angle=np.pi / 2,
-                duration=2e-3,
-                delay=self.system.rf_dead_time,
-                use='excitation',
-                system=self.system,
-            )
-        )
-        seq, _ = self.add_to_seq(seq)
+        """Plot k-space trajectory using the analytical expression."""
+        kx, ky = self.calculate_trajectory()
 
-        # calculate k-space trajectory
-        k_traj_adc, k_traj, _, _, _ = seq.calculate_kspace()
-
-        # plot trajectory
         fig = plt.figure()
-        plt.plot(k_traj[0], k_traj[1], 'b')
-        plt.plot(k_traj_adc[0], k_traj_adc[1], 'x', color='red', markersize=4)
+        plt.plot(kx.T, ky.T, 'b')
+        plt.plot(kx.ravel(), ky.ravel(), 'x', color='red', markersize=4)
+        plt.xlabel('kx (1/m)')
+        plt.ylabel('ky (1/m)')
         plt.grid()
         plt.show()
 
