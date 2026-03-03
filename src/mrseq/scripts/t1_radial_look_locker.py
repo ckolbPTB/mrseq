@@ -26,6 +26,7 @@ def t1_radial_look_locker_kernel(
     n_readout: int,
     n_spokes: int,
     spoke_angle: float,
+    n_repetitions: int,
     readout_oversampling: float,
     slice_thickness: float,
     gx_pre_duration: float,
@@ -62,6 +63,8 @@ def t1_radial_look_locker_kernel(
         Number of radial spokes.
     spoke_angle
         Angle between successive radial spokes (in radian).
+    n_repetitions
+        Number of times the entire sequence is repeteated after a 12s wait time.
     readout_oversampling
         Readout oversampling factor, commonly 2. This reduces aliasing artifacts.
     slice_thickness
@@ -111,6 +114,8 @@ def t1_radial_look_locker_kernel(
     """
     if readout_oversampling < 1:
         raise ValueError('Readout oversampling factor must be >= 1.')
+
+    repetition_wait_time = 12
 
     # create PyPulseq Sequence object and set system limits
     seq = pp.Sequence(system=system)
@@ -213,69 +218,82 @@ def t1_radial_look_locker_kernel(
         prot = ismrmrd.Dataset(mrd_header_file, 'w')
         prot.write_xml_header(hdr.toXML('utf-8'))
 
-    # Create inversion pulse
-    seq, _block_duration, time_since_inversion = add_t1_inv_prep(
-        seq=seq,
-        system=system,
-        rf_duration=rf_inv_duration,
-        spoiler_flat_time=rf_inv_spoil_flattime,
-        spoiler_ramp_time=rf_inv_spoil_risetime,
-        rf_mu=rf_inv_mu,
-    )
+    for rep_ in range(n_repetitions):
+        # Create inversion pulse
+        seq, _block_duration, time_since_inversion = add_t1_inv_prep(
+            seq=seq,
+            system=system,
+            rf_duration=rf_inv_duration,
+            spoiler_flat_time=rf_inv_spoil_flattime,
+            spoiler_ramp_time=rf_inv_spoil_risetime,
+            rf_mu=rf_inv_mu,
+        )
 
-    for spoke_ in range(n_spokes):
-        # calculate current phase_offset if rf_spoiling is activated
-        if rf_spoiling_phase_increment > 0:
-            rf.phase_offset = rf_phase / 180 * np.pi
-            adc.phase_offset = rf_phase / 180 * np.pi
+        for spoke_ in range(n_spokes):
+            # calculate current phase_offset if rf_spoiling is activated
+            if rf_spoiling_phase_increment > 0:
+                rf.phase_offset = rf_phase / 180 * np.pi
+                adc.phase_offset = rf_phase / 180 * np.pi
 
-        # add slice selective excitation pulse
-        seq.add_block(rf, gz, pp.make_label(type='SET', label='TRID', value=1))
+            # add slice selective excitation pulse
+            seq.add_block(rf, gz, pp.make_label(type='SET', label='TRID', value=1))
 
-        # update rf phase offset for the next excitation pulse
-        rf_inc = divmod(rf_inc + rf_spoiling_phase_increment, 360.0)[1]
-        rf_phase = divmod(rf_phase + rf_inc, 360.0)[1]
+            # update rf phase offset for the next excitation pulse
+            rf_inc = divmod(rf_inc + rf_spoiling_phase_increment, 360.0)[1]
+            rf_phase = divmod(rf_phase + rf_inc, 360.0)[1]
 
-        # calculate rotation angle for the current spoke, we start with angle > 0 to ensure we always have a
-        # gy/gy gradient which is import for GE
-        rotation_angle_rad = spoke_angle * (spoke_ + 1)
+            # calculate rotation angle for the current spoke, we start with angle > 0 to ensure we always have a
+            # gy/gy gradient which is import for GE
+            rotation_angle_rad = spoke_angle * (spoke_ + 1 + rep_ * n_spokes)
 
-        if te_delay > 0:
-            seq.add_block(gzr)
-            seq.add_block(pp.make_delay(te_delay))
-            seq.add_block(*pp.rotate(gx_pre, angle=rotation_angle_rad, axis='z'))
-        else:
-            seq.add_block(*pp.rotate(gx_pre, gzr, angle=rotation_angle_rad, axis='z'))
+            if te_delay > 0:
+                seq.add_block(gzr)
+                seq.add_block(pp.make_delay(te_delay))
+                seq.add_block(*pp.rotate(gx_pre, angle=rotation_angle_rad, axis='z'))
+            else:
+                seq.add_block(*pp.rotate(gx_pre, gzr, angle=rotation_angle_rad, axis='z'))
 
-        # rotate and add the readout gradient and ADC
-        labels = []
-        labels.append(pp.make_label(label='LIN', type='SET', value=spoke_))
-        seq.add_block(*pp.rotate(gx, adc, angle=rotation_angle_rad, axis='z'), *labels)
+            # rotate and add the readout gradient and ADC
+            labels = []
+            labels.append(pp.make_label(label='LIN', type='SET', value=spoke_))
+            labels.append(pp.make_label(label='REP', type='SET', value=rep_))
+            seq.add_block(*pp.rotate(gx, adc, angle=rotation_angle_rad, axis='z'), *labels)
 
-        seq.add_block(*pp.rotate(gx_post, gz_spoil, angle=rotation_angle_rad, axis='z'))
+            seq.add_block(*pp.rotate(gx_post, gz_spoil, angle=rotation_angle_rad, axis='z'))
 
-        # add delay in case TR > min_TR
-        if tr_delay > 0:
+            # add delay in case TR > min_TR
+            if tr_delay > 0:
+                seq.add_block(
+                    pp.make_delay(
+                        round_to_raster(tr_delay - ge_segment_delay, raster_time=system.block_duration_raster)
+                    )
+                )
+
+            if mrd_header_file:
+                # add acquisitions to metadata
+                k_radial_line = np.linspace(
+                    -n_readout_with_oversampling // 2,
+                    (n_readout_with_oversampling // 2) - 1,
+                    n_readout_with_oversampling,
+                )
+                radial_trajectory = np.zeros((n_readout_with_oversampling, 2), dtype=np.float32)
+
+                radial_trajectory[:, 0] = k_radial_line * np.cos(rotation_angle_rad)
+                radial_trajectory[:, 1] = k_radial_line * np.sin(rotation_angle_rad)
+
+                acq = ismrmrd.Acquisition()
+                acq.resize(trajectory_dimensions=2, number_of_samples=adc.num_samples)
+                acq.traj[:] = radial_trajectory
+                prot.append_acquisition(acq)
+
+        # add delay between repetitions
+        if rep_ < n_repetitions - 1:
             seq.add_block(
-                pp.make_delay(round_to_raster(tr_delay - ge_segment_delay, raster_time=system.block_duration_raster))
+                pp.make_delay(
+                    round_to_raster(repetition_wait_time - ge_segment_delay, raster_time=system.block_duration_raster)
+                ),
+                pp.make_label(type='SET', label='TRID', value=2088),
             )
-
-        if mrd_header_file:
-            # add acquisitions to metadata
-            k_radial_line = np.linspace(
-                -n_readout_with_oversampling // 2,
-                (n_readout_with_oversampling // 2) - 1,
-                n_readout_with_oversampling,
-            )
-            radial_trajectory = np.zeros((n_readout_with_oversampling, 2), dtype=np.float32)
-
-            radial_trajectory[:, 0] = k_radial_line * np.cos(rotation_angle_rad)
-            radial_trajectory[:, 1] = k_radial_line * np.sin(rotation_angle_rad)
-
-            acq = ismrmrd.Acquisition()
-            acq.resize(trajectory_dimensions=2, number_of_samples=adc.num_samples)
-            acq.traj[:] = radial_trajectory
-            prot.append_acquisition(acq)
 
     # obtain noise samples
     seq.add_block(
@@ -312,7 +330,8 @@ def main(
     rf_flip_angle: float = 9,
     fov_xy: float = 128e-3,
     n_readout: int = 128,
-    n_spokes: int = 1400,
+    n_spokes: int = 400,
+    n_repetitions: int = 1,
     slice_thickness: float = 8e-3,
     receiver_bandwidth_per_pixel: float = 800,  # Hz/pixel
     show_plots: bool = True,
@@ -338,6 +357,8 @@ def main(
         Number of frequency encoding steps.
     n_spokes
         Number of radial lines.
+    n_repetitions
+        Number of times the entire sequence is repeteated after a 12s wait time.
     slice_thickness
         Slice thickness of the 2D slice (in meters).
     receiver_bandwidth_per_pixel
@@ -406,6 +427,7 @@ def main(
         n_spokes=n_spokes,
         spoke_angle=spoke_angle,
         readout_oversampling=readout_oversampling,
+        n_repetitions=n_repetitions,
         slice_thickness=slice_thickness,
         gx_pre_duration=gx_pre_duration,
         gx_flat_time=gx_flat_time,

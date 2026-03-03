@@ -6,7 +6,7 @@ from mrseq.scripts.t1_radial_look_locker import main as create_seq
 from mrseq.utils.system_defaults import sys_a
 from mrseq.utils.system_defaults import sys_b
 
-EXPECTED_DUR = 7.20728  # defined 2026-02-15
+EXPECTED_DUR = 2.14728  # defined 2026-03-03
 
 
 def test_default_seq_duration(system_defaults):

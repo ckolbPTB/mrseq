@@ -25,6 +25,7 @@ def adc_tse_propeller_kernel(
     fov_z: float,
     n_readout: int,
     n_phase_encoding: int,
+    phase_encoding_oversampling: float,
     n_slice_encoding: int,
     gx_pre_duration: float,
     gx_flat_time: float,
@@ -62,6 +63,8 @@ def adc_tse_propeller_kernel(
         Number of frequency encoding steps.
     n_phase_encoding
         Number of phase encoding steps.
+    phase_encoding_oversampling
+        Oversampling factor for phase encoding to reduce gaps between blades.
     n_slice_encoding
         Number of slice encoding steps.
     gx_pre_duration
@@ -102,6 +105,9 @@ def adc_tse_propeller_kernel(
     min_te
         Shortest possible echo time.
     """
+    if phase_encoding_oversampling < 1:
+        raise ValueError('Phase encoding oversampling factor must be larger than or equal to 1.')
+
     # create PyPulseq Sequence object and set system limits
     seq = pp.Sequence(system=system)
 
@@ -147,7 +153,7 @@ def adc_tse_propeller_kernel(
         0
     ][0]
 
-    n_blades = n_phase_encoding // n_echoes
+    n_blades = int(n_phase_encoding / n_echoes * phase_encoding_oversampling)
 
     # phase encoding gradient prepared similar to the readout to ensure it can be "mixed" when rotating
     gy_pre_max = pp.make_trapezoid(channel='y', area=delta_k * n_readout / 2, duration=gx_pre_duration, system=system)
@@ -377,6 +383,7 @@ def main(
     fov_z: float = 80e-3,
     n_readout: int = 128,
     n_phase_encoding: int = 128,
+    phase_encoding_oversampling: float = 1.0,
     n_slice_encoding: int = 10,
     b_values: float | Sequence[float] = 0,
     show_plots: bool = True,
@@ -404,6 +411,8 @@ def main(
         Number of frequency encoding steps.
     n_phase_encoding
         Number of phase encoding steps.
+    phase_encoding_oversampling
+        Oversampling factor for phase encoding to reduce gaps between blades.
     n_slice_encoding
         Number of phase encoding steps along the slice direction.
     b_values
@@ -469,6 +478,7 @@ def main(
         fov_z=fov_z,
         n_readout=n_readout,
         n_phase_encoding=n_phase_encoding,
+        phase_encoding_oversampling=phase_encoding_oversampling,
         n_slice_encoding=n_slice_encoding,
         gx_pre_duration=gx_pre_duration,
         gx_flat_time=gx_flat_time,
