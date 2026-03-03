@@ -280,30 +280,25 @@ def epi2d_se_kernel(
 
         # add navigator scans for ghost correction
         if add_navigator_acq:
-            # reverse the readout gradient and pre-winder in advance for navigator
-            gx_pre = pp.scale_grad(epi2d.gx_pre, -1)
-            gx = pp.scale_grad(epi2d.gx, -1)
             # add slice selection rewinder and readout pre-winder in x direction (gy_pre will be added after navigators)
-            gzr, gx_pre = pp.align(left=[gzr], right=[gx_pre])
+            gzr, gx_pre = pp.align(left=[gzr], right=[epi2d.gx_pre])
             seq.add_block(
                 gzr,
                 gx_pre,
                 pp.make_label(label='NAV', type='SET', value=1),
                 pp.make_label(label='LIN', type='SET', value=floor(n_phase_encoding / 2)),
             )
-            # reverse gx_pre back after adding to sequence
-            gx_pre = pp.scale_grad(gx_pre, -1)
 
             # add 3 navigator acquisitions
             for n in range(n_navigator_acq):
+                gx_sign = (-1) ** n
                 seq.add_block(
-                    gx,
+                    pp.scale_grad(epi2d.gx, gx_sign),
                     epi2d.adc,
-                    pp.make_label(label='REV', type='SET', value=gx.amplitude < 0),
-                    pp.make_label(label='SEG', type='SET', value=gx.amplitude < 0),
+                    pp.make_label(label='REV', type='SET', value=gx_sign < 0),
+                    pp.make_label(label='SEG', type='SET', value=gx_sign < 0),
                     pp.make_label(label='AVG', type='SET', value=(n + 1) == 3),
                 )
-                gx = pp.scale_grad(gx, -1)
 
             # add gy_pre and reset labels
             seq.add_block(
