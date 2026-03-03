@@ -331,7 +331,7 @@ def epi2d_se_kernel(
                         nav_kx = nav_kx_offset + nav_kx_forward
                     else:
                         nav_kx = nav_kx_offset - nav_kx_forward
-                    traj[:, 0] = np.round(nav_kx * fov_xy * readout_oversampling, 3)
+                    traj[:, 0] = nav_kx * fov_xy * readout_oversampling
                     acq = ismrmrd.Acquisition()
                     acq.resize(trajectory_dimensions=2, number_of_samples=n_samples)
                     acq.traj[:] = traj

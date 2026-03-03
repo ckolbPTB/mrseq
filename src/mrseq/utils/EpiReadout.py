@@ -502,8 +502,8 @@ class EpiReadout:
             if mrd_dataset is not None:
                 n_samples = self.adc.num_samples
                 traj = np.zeros((n_samples, 2), dtype=np.float32)
-                traj[:, 0] = np.round(kx_traj[pe_idx] * self.fov * self.oversampling, 3)
-                traj[:, 1] = np.round(ky_traj[pe_idx] * self.fov, 3)
+                traj[:, 0] = kx_traj[pe_idx] * self.fov * self.oversampling
+                traj[:, 1] = ky_traj[pe_idx] * self.fov
 
                 acq = ismrmrd.Acquisition()
                 acq.resize(trajectory_dimensions=2, number_of_samples=n_samples)
