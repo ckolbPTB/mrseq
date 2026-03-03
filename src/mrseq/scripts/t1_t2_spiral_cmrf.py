@@ -197,7 +197,7 @@ def t1_t2_spiral_cmrf_kernel(
     print('\n Manual timing calculations:')
     print(f'\n shortest possible TR = {min_tr * 1000:.3f} ms')
     print(f'\n final TR = {final_tr * 1000:.3f} ms')
-    print(f'Acquisition window per cardiac cycle = {final_tr * len(n_shots_per_block) * 1000:.3f} ms')
+    print(f'Acquisition window per cardiac cycle = {final_tr * n_shots_per_block * 1000:.3f} ms')
 
     # create header
     if mrd_header_file:
@@ -226,16 +226,16 @@ def t1_t2_spiral_cmrf_kernel(
             default_duration=0.5 - min_cardiac_trigger_delay,
         )
 
-    # initialize LIN label
-    seq.add_block(
-        pp.make_delay(minimum_time_to_set_label),
-        pp.make_label(label='LIN', type='SET', value=0),
-        pp.make_label(type='SET', label='TRID', value=1033),
-    )
-
     for rep_ in range(n_repetitions):
-        # initialize repetition counter
-        rep_counter = 0
+        # initialize LIN label
+        seq.add_block(
+            pp.make_delay(minimum_time_to_set_label),
+            pp.make_label(label='LIN', type='SET', value=0),
+            pp.make_label(type='SET', label='TRID', value=1033),
+        )
+
+        # initialize spoke counter
+        spoke_counter = 0
 
         # loop over all blocks
         for block in range(n_blocks):
@@ -291,7 +291,6 @@ def t1_t2_spiral_cmrf_kernel(
             else:
                 # get echo time for current block
                 echo_time = t2_prep_echo_times[block % 5 - 2]
-                echo_time = t2_prep_echo_times[0]
 
                 # get prep block duration and calculate corresponding trigger delay
                 t2prep_block, prep_dur = add_t2_prep(echo_time=echo_time, system=system)
@@ -319,10 +318,12 @@ def t1_t2_spiral_cmrf_kernel(
             # loop over shots / repetitions per block
             for _ in range(n_shots_per_block):
                 # get current flip angle
-                fa = flip_angles[rep_counter]
+                fa = flip_angles[spoke_counter]
 
                 # calculate theoretical golden angle rotation for current shot
-                golden_angle = (rep_counter * 2 * np.pi * (1 - 2 / (1 + np.sqrt(5)))) % (2 * np.pi)
+                golden_angle = ((rep_ * flip_angles.size + spoke_counter) * 2 * np.pi * (1 - 2 / (1 + np.sqrt(5)))) % (
+                    2 * np.pi
+                )
 
                 # find closest unique spiral to current golden angle rotation
                 diff = np.abs(delta_array - golden_angle)
@@ -342,7 +343,12 @@ def t1_t2_spiral_cmrf_kernel(
                 )
 
                 # add slice selective excitation pulse
-                seq.add_block(rf_n, gz_n, pp.make_label(type='SET', label='TRID', value=int(1 + spiral_idx)))
+                seq.add_block(
+                    rf_n,
+                    gz_n,
+                    pp.make_label(type='SET', label='TRID', value=int(1 + spiral_idx)),
+                    pp.make_label(label='REP', type='SET', value=rep_),
+                )
 
                 # add slice selection re-phasing gradient
                 seq.add_block(gzr_n)
@@ -353,14 +359,14 @@ def t1_t2_spiral_cmrf_kernel(
                 # add spoiler
                 seq.add_block(gz_spoil)
 
-                # add TR delay and LIN label
+                # add TR delay and LIN/REP label
                 seq.add_block(pp.make_delay(tr_delay), pp.make_label(label='LIN', type='INC', value=1))
 
                 if mrd_header_file:
                     # add acquisitions to metadata
                     spiral_trajectory = np.zeros((trajectory.shape[1], 2), dtype=np.float32)
 
-                    # the spiral trajectory is calculated in units of delta_k. for image reconstruction we use delta_k = 1
+                    # the spiral trajectory is calculated in units of delta_k, for reconstruction we use delta_k = 1
                     spiral_trajectory[:, 0] = trajectory[spiral_idx, :, 0] * fov_xy
                     spiral_trajectory[:, 1] = trajectory[spiral_idx, :, 1] * fov_xy
 
@@ -370,7 +376,7 @@ def t1_t2_spiral_cmrf_kernel(
                     prot.append_acquisition(acq)
 
                 # increment repetition counter
-                rep_counter += 1
+                spoke_counter += 1
 
         # add delay between repetitions
         if rep_ < n_repetitions - 1:
