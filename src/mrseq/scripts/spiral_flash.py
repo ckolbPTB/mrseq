@@ -28,6 +28,8 @@ def spiral_flash_kernel(
     slice_thickness: float,
     n_slices: int,
     n_dummy_excitations: int,
+    spiral_sampling_period: float | None,
+    g_spiral_rew_slew_rate_scaling: float,
     gx_pre_duration: float,
     rf_duration: float,
     rf_flip_angle: float,
@@ -62,6 +64,10 @@ def spiral_flash_kernel(
         Number of slices.
     n_dummy_excitations
         Number of dummy excitations before data acquisition to ensure steady state.
+    spiral_sampling_period
+        Sampling period for the readout trajectory. If None, the system gradient raster time is used.
+    g_spiral_rew_slew_rate_scaling
+        Scaling of max slew rate for rewinder of spiral readout gradient
     gx_pre_duration
         Duration of readout pre-winder gradient (in seconds)
     rf_duration
@@ -120,6 +126,8 @@ def spiral_flash_kernel(
         n_spirals=None,
         max_pre_duration=gx_pre_duration,
         spiral_type='out',
+        sampling_period=spiral_sampling_period,
+        g_rew_slew_rate_scaling=g_spiral_rew_slew_rate_scaling,
     )
     max_spiral_duration = max(pp.calc_duration(gx, gy) for gx, gy in zip(gx, gy, strict=True))
 
@@ -347,6 +355,8 @@ def main(
         slice_thickness=slice_thickness,
         n_slices=n_slices,
         n_dummy_excitations=n_dummy_excitations,
+        spiral_sampling_period=None,
+        g_spiral_rew_slew_rate_scaling=1.0,
         gx_pre_duration=gx_pre_duration,
         rf_duration=rf_duration,
         rf_flip_angle=rf_flip_angle,

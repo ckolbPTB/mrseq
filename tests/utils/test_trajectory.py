@@ -6,6 +6,7 @@ import numpy as np
 import pypulseq as pp
 import pytest
 from mrseq.utils import spiral_acquisition
+from mrseq.utils import sys_defaults
 from mrseq.utils.trajectory import MultiEchoAcquisition
 from mrseq.utils.trajectory import cartesian_phase_encoding
 from mrseq.utils.trajectory import undersampled_variable_density_spiral
@@ -127,13 +128,14 @@ def get_interp_waveform_for_gx_gy(seq: pp.Sequence, dt: np.ndarray | None = None
 
 @pytest.mark.parametrize('n_readout', (128, 256))
 @pytest.mark.parametrize('fov', (128e-3, 320e-3))
+@pytest.mark.parametrize('sampling_period', (sys_defaults.grad_raster_time, sys_defaults.grad_raster_time * 2))
 @pytest.mark.parametrize('undersampling_factor', (1, 2, 3, 4))
 def test_undersampled_variable_density_spiral(
-    system_defaults: pp.Opts, n_readout: int, fov: float, undersampling_factor: float
+    system_defaults: pp.Opts, n_readout: int, fov: float, undersampling_factor: float, sampling_period: float
 ):
     """Test spiral for different undersampling factors."""
     traj, _grad, _s, _timing, _r, _theta, n_spirals, _fov_scaling_center, _fov_scaling_edge = (
-        undersampled_variable_density_spiral(system_defaults, n_readout, fov, undersampling_factor)
+        undersampled_variable_density_spiral(system_defaults, n_readout, fov, undersampling_factor, sampling_period)
     )
     total_number_of_points = len(traj) * n_spirals
     assert np.round(n_readout**2 / total_number_of_points) == undersampling_factor
@@ -145,6 +147,11 @@ def test_undersampled_variable_density_spiral(
 @pytest.mark.parametrize('undersampling_factor', (1, 3))
 @pytest.mark.parametrize('readout_oversampling', (1, 2, 4))
 @pytest.mark.parametrize('spiral_type', ('out', 'in-out'))
+@pytest.mark.parametrize('g_rew_slew_rate_scaling', (1.0, 0.8))
+@pytest.mark.parametrize(
+    'sampling_period',
+    (sys_defaults.grad_raster_time, sys_defaults.grad_raster_time * 2, sys_defaults.grad_raster_time * 3),
+)
 def test_spiral_acquisition(
     system_defaults: pp.Opts,
     n_readout: int,
@@ -153,6 +160,8 @@ def test_spiral_acquisition(
     n_spirals: int,
     readout_oversampling: Literal[1, 2, 4],
     spiral_type: Literal['out', 'in-out'],
+    g_rew_slew_rate_scaling: float,
+    sampling_period: float,
 ):
     """Test spiral trajectories for different parameter combinations."""
     g_pre_duration = 2e-3  # make this duration long to work for all combinations
@@ -167,6 +176,8 @@ def test_spiral_acquisition(
         n_spirals,
         g_pre_duration,
         spiral_type=spiral_type,
+        g_rew_slew_rate_scaling=g_rew_slew_rate_scaling,
+        sampling_period=sampling_period,
     )
 
     # Verify timing for each spiral arm

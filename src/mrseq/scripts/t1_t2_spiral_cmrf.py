@@ -31,6 +31,7 @@ def t1_t2_spiral_cmrf_kernel(
     n_repetitions: int,
     spiral_undersampling: int,
     slice_thickness: float,
+    spiral_sampling_period: float | None,
     g_spiral_rew_slew_rate_scaling: float,
     rf_inv_duration: float,
     rf_inv_spoil_risetime: float,
@@ -70,6 +71,8 @@ def t1_t2_spiral_cmrf_kernel(
         Undersampling in the periphery of the variable density spiral.
     slice_thickness
         Slice thickness of the 2D slice (in meters).
+    spiral_sampling_period
+        Sampling period for the readout trajectory. If None, the system gradient raster time is used.
     g_spiral_rew_slew_rate_scaling
         Scaling of max slew rate for rewinder of spiral readout gradient
     rf_inv_duration
@@ -160,6 +163,7 @@ def t1_t2_spiral_cmrf_kernel(
         max_pre_duration=0.0,
         spiral_type='out',
         g_rew_slew_rate_scaling=g_spiral_rew_slew_rate_scaling,
+        sampling_period=spiral_sampling_period,
     )
     delta_array = 2 * np.pi / len(gx) * np.arange(len(gx))  # angle difference between subsequent spirals
     max_spiral_duration = max(pp.calc_duration(gx, gy) for gx, gy in zip(gx, gy, strict=True))
@@ -503,6 +507,7 @@ def main(
         n_repetitions=n_repetitions,
         spiral_undersampling=spiral_undersampling,
         slice_thickness=slice_thickness,
+        spiral_sampling_period=None,
         g_spiral_rew_slew_rate_scaling=1,
         rf_inv_duration=rf_inv_duration,
         rf_inv_spoil_risetime=rf_inv_spoil_risetime,

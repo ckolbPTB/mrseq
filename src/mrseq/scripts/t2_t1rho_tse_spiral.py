@@ -30,6 +30,8 @@ def t2_t1rho_tse_spiral_kernel(
     readout_oversampling: Literal[1, 2, 4],
     spiral_undersampling: float,
     n_slice_encoding: int,
+    sampling_period: float | None,
+    g_spiral_rew_slew_rate_scaling: float,
     gx_pre_duration: float,
     rf_ex_duration: float,
     rf_ex_bwt: float,
@@ -71,6 +73,10 @@ def t2_t1rho_tse_spiral_kernel(
         Angular undersampling of the spiral trajectoy.
     n_slice_encoding
         Number of slice encoding steps.
+    spiral_sampling_period
+        Sampling period for the readout trajectory. If None, the system gradient raster time is used.
+    g_spiral_rew_slew_rate_scaling
+        Scaling of max slew rate for rewinder of spiral readout gradient
     gx_pre_duration
         Duration of the readout pre-winder gradient in seconds..
     rf_ex_duration
@@ -150,6 +156,8 @@ def t2_t1rho_tse_spiral_kernel(
         n_spirals=None,
         max_pre_duration=gx_pre_duration,
         spiral_type='in-out',
+        sampling_period=sampling_period,
+        g_rew_slew_rate_scaling=g_spiral_rew_slew_rate_scaling,
     )
     delta_array = np.pi / len(gx) * np.arange(len(gx))  # angle difference between subsequent spirals
 
@@ -419,6 +427,8 @@ def main(
         readout_oversampling=readout_oversampling,
         spiral_undersampling=n_readout / n_spiral_arms,
         n_slice_encoding=n_slice_encoding,
+        sampling_period=None,
+        g_spiral_rew_slew_rate_scaling=1.0,
         gx_pre_duration=gx_pre_duration,
         rf_ex_duration=rf_ex_duration,
         rf_ex_bwt=rf_ex_bwt,

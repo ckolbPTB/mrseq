@@ -286,7 +286,7 @@ class MultiEchoAcquisition:
 
 
 def undersampled_variable_density_spiral(
-    system: pp.Opts, n_readout: int, fov: float, undersampling_factor: float
+    system: pp.Opts, n_readout: int, fov: float, undersampling_factor: float, sampling_period: float
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, int, float, float]:
     """Create undersampled variable density spiral.
 
@@ -311,6 +311,8 @@ def undersampled_variable_density_spiral(
         Field of view (in meters).
     undersampling_factor
         Undersampling factor of spiral trajectory
+    sampling_period
+        Sampling period for the readout trajectory. This should be on the gradient raster.
 
     Returns
     -------
@@ -337,7 +339,7 @@ def undersampled_variable_density_spiral(
         try:
             traj, grad, slew, timing, radius, theta = variable_density_spiral_trajectory(
                 system=system,
-                sampling_period=system.grad_raster_time,
+                sampling_period=sampling_period,
                 n_interleaves=n_spirals,
                 fov_coefficients=fov_coefficients,
                 max_kspace_radius=0.5 / fov * n_readout,
@@ -367,6 +369,7 @@ def spiral_acquisition(
     max_pre_duration: float,
     spiral_type: Literal['out', 'in-out'],
     g_rew_slew_rate_scaling: float,
+    sampling_period: float | None,
 ) -> tuple[list[Any], list[Any], Any, np.ndarray, float]:
     """Generate a spiral acquisition sequence.
 
@@ -390,6 +393,8 @@ def spiral_acquisition(
         Type of spiral acquisition. 'out' for outward spirals, 'in-out' for spirals turning in and then out.
     g_rew_slew_rate_scaling
         Scaling of slew rate for refocus gradient
+    sampling_period
+        Sampling period for the readout trajectory. If None, the system gradient raster time is used.
 
     Returns
     -------
@@ -406,9 +411,13 @@ def spiral_acquisition(
     """
     if g_rew_slew_rate_scaling > 1:
         raise ValueError(f'Scaling of slew rate should be <= 1 and not {g_rew_slew_rate_scaling}')
+
+    if sampling_period is None:
+        sampling_period = system.grad_raster_time
+
     # calculate single spiral trajectory
     traj, grad, _s, _timing, _r, _theta, n_spirals_undersampling, fov_scaling_center, fov_scaling_edge = (
-        undersampled_variable_density_spiral(system, n_readout, fov, undersampling_factor)
+        undersampled_variable_density_spiral(system, n_readout, fov, undersampling_factor, sampling_period)
     )
     n_spirals = n_spirals_undersampling if n_spirals is None else n_spirals
     print(
@@ -417,27 +426,36 @@ def spiral_acquisition(
         f'FOV: {fov * fov_scaling_center:.3f} (k-sapce center) - {fov * fov_scaling_edge:.3f} (k-space edge)',
     )
 
+    # interpolate to gradient raster time
+    intp_factor = sampling_period / system.grad_raster_time
+    orig_raster = np.linspace(0.5, len(grad) - 0.5, len(grad))
+    grad_raster = np.linspace(0.5 / intp_factor, len(grad) - 0.5 / intp_factor, int(len(grad) * intp_factor))
+    grad = np.interp(grad_raster, orig_raster, grad.real) + 1j * np.interp(grad_raster, orig_raster, grad.imag)
+
     delta_angle = 2 * np.pi / n_spirals
     n_samples_to_echo = 0.5
     if spiral_type == 'in-out':
-        n_samples_to_echo = len(grad)
+        n_samples_to_echo = len(traj)
         grad = np.concatenate((-np.asarray(grad * np.exp(1j * np.pi))[::-1], grad))
         traj = np.concatenate((np.asarray(traj * np.exp(1j * np.pi))[::-1], traj))
         delta_angle = delta_angle / 2
 
     # calculate ADC
-    n_readout_with_oversampling = len(grad) * readout_oversampling
-    adc_dwell_time = system.grad_raster_time / readout_oversampling
+    n_readout_with_oversampling = len(traj) * readout_oversampling
+    adc_dwell_time = sampling_period / readout_oversampling
     adc = pp.make_adc(
         num_samples=n_readout_with_oversampling, dwell=adc_dwell_time, system=system, delay=system.adc_dead_time
     )
     traj = np.interp(
-        np.linspace(0.5 / readout_oversampling, len(grad) - 0.5 / readout_oversampling, n_readout_with_oversampling),
-        np.linspace(0.5, len(grad) - 0.5, len(grad)),
+        np.linspace(0.5 / readout_oversampling, len(traj) - 0.5 / readout_oversampling, n_readout_with_oversampling),
+        np.linspace(0.5, len(traj) - 0.5, len(traj)),
         traj,
     )
 
-    print(f'Receiver bandwidth: {int(1.0 / (adc_dwell_time * n_readout_with_oversampling))} Hz/pixel')
+    print(
+        f'Receiver bandwidth: {int(1.0 / (adc_dwell_time * n_readout_with_oversampling))} Hz/pixel '
+        f'(Readout duration: {adc.num_samples * adc.dwell * 1000:.3f} ms).'
+    )
 
     # Create gradient values and trajectory for different spirals
     grad_list = [grad * np.exp(1j * delta_angle * idx) for idx in np.arange(n_spirals)]
