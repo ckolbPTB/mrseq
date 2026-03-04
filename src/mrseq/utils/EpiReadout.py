@@ -39,10 +39,12 @@ def _trapezoid_area_at_times(
         Accumulated gradient area at each sample time (in 1/m).
     """
     t1 = rise_time
-    t2 = rise_time + flat_time
+    t2 = t1 + flat_time
+    t3 = t2 + fall_time
 
     area_at_t1 = amplitude * rise_time / 2
     area_at_t2 = area_at_t1 + amplitude * flat_time
+    area_at_t3 = area_at_t2 + amplitude * fall_time / 2
 
     area = np.zeros_like(sample_times)
     for i, t in enumerate(sample_times):
@@ -52,25 +54,27 @@ def _trapezoid_area_at_times(
             area[i] = amplitude * t**2 / (2 * rise_time)
         elif t <= t2:
             area[i] = area_at_t1 + amplitude * (t - t1)
-        else:
+        elif t <= t3:
             dt = t - t2
             area[i] = area_at_t2 + amplitude * dt - amplitude * dt**2 / (2 * fall_time)
+        else:
+            area[i] = area_at_t3
 
     return area
 
 
 def _piecewise_linear_area_at_times(
-    wf_times: np.ndarray,
-    wf_values: np.ndarray,
+    waveform_times: np.ndarray,
+    waveform_values: np.ndarray,
     sample_times: np.ndarray,
 ) -> np.ndarray:
     """Compute cumulative integral of a piecewise-linear waveform at given sample times.
 
     Parameters
     ----------
-    wf_times
+    waveform_times
         Time points of the piecewise-linear waveform (in seconds), sorted ascending.
-    wf_values
+    waveform_values
         Waveform amplitude values at each time point (in Hz/m).
     sample_times
         Times at which to evaluate the cumulative area (in seconds).
@@ -80,26 +84,26 @@ def _piecewise_linear_area_at_times(
     area
         Cumulative area at each sample time (in 1/m).
     """
-    n_knots = len(wf_times)
+    n_knots = len(waveform_times)
     cum_area = np.zeros(n_knots)
     for k in range(1, n_knots):
-        dt = wf_times[k] - wf_times[k - 1]
-        cum_area[k] = cum_area[k - 1] + (wf_values[k] + wf_values[k - 1]) / 2 * dt
+        dt = waveform_times[k] - waveform_times[k - 1]
+        cum_area[k] = cum_area[k - 1] + (waveform_values[k] + waveform_values[k - 1]) / 2 * dt
 
     area = np.zeros_like(sample_times)
     for i, t in enumerate(sample_times):
-        if t <= wf_times[0]:
+        if t <= waveform_times[0]:
             area[i] = 0.0
-        elif t >= wf_times[-1]:
+        elif t >= waveform_times[-1]:
             area[i] = cum_area[-1]
         else:
-            k = np.searchsorted(wf_times, t, side='right')
+            k = np.searchsorted(waveform_times, t, side='right')
             base_area = cum_area[k - 1]
-            dt_seg = wf_times[k] - wf_times[k - 1]
-            dt = t - wf_times[k - 1]
+            dt_seg = waveform_times[k] - waveform_times[k - 1]
+            dt = t - waveform_times[k - 1]
             frac = dt / dt_seg
-            wf_at_t = wf_values[k - 1] + frac * (wf_values[k] - wf_values[k - 1])
-            area[i] = base_area + (wf_values[k - 1] + wf_at_t) / 2 * dt
+            wf_at_t = waveform_values[k - 1] + frac * (waveform_values[k] - waveform_values[k - 1])
+            area[i] = base_area + (waveform_values[k - 1] + wf_at_t) / 2 * dt
 
     return area
 
@@ -381,6 +385,77 @@ class EpiReadout:
         """Return total duration of readout excluding pre-phasers but including optional spoiler."""
         return self.total_duration - pp.calc_duration(self.gx_pre, self.gy_pre)
 
+    def _readout_block_kxy(
+        self,
+        pe_idx: int,
+        sample_times: np.ndarray,
+        ky_base: float,
+    ) -> tuple[np.ndarray, np.ndarray, float]:
+        """Compute kx/ky at given time points for a single readout block.
+
+        Parameters
+        ----------
+        pe_idx
+            Phase encoding index (0-based).
+        sample_times
+            Time points relative to the start of the readout block (in seconds).
+        ky_base
+            Cumulative ky offset at the start of this block (in 1/m).
+
+        Returns
+        -------
+        kx
+            kx positions at each sample time (in 1/m).
+        ky
+            ky positions at each sample time (in 1/m).
+        ky_base_next
+            Updated ky_base for the next block (in 1/m).
+        """
+        n_pe = self.n_phase_enc_total
+        kx_offset = self.gx_pre.area
+
+        # kx: accumulated area under the readout gradient
+        kx_forward = _trapezoid_area_at_times(
+            self.gx.rise_time, self.gx.flat_time, self.gx.fall_time, abs(self.gx.amplitude), sample_times
+        )
+
+        if self.readout_type == 'flyback':
+            kx = kx_offset + kx_forward
+            ky = np.full_like(sample_times, ky_base)
+            ky_base_next = ky_base + self.gy_blip.area
+
+        elif self.readout_type == 'symmetric':
+            if pe_idx % 2 == 0:
+                kx = kx_offset + kx_forward
+            else:
+                kx = kx_offset + self.gx.area - kx_forward
+
+            # ky changes during readout due to blip overlap
+            if pe_idx == 0:
+                assert self.gy_blipup is not None
+                bu_tt = self.gy_blipup.tt + self.gy_blipup.delay
+                ky_blip = _piecewise_linear_area_at_times(bu_tt, self.gy_blipup.waveform, sample_times)
+                blip_total = _piecewise_linear_area_at_times(bu_tt, self.gy_blipup.waveform, np.array([bu_tt[-1]]))[0]
+            elif pe_idx == n_pe - 1:
+                assert self.gy_blipdown is not None
+                bd_tt = self.gy_blipdown.tt + self.gy_blipdown.delay
+                ky_blip = _piecewise_linear_area_at_times(bd_tt, self.gy_blipdown.waveform, sample_times)
+                blip_total = 0.0
+            else:
+                assert self.gy_blipdownup is not None
+                bdu_tt = self.gy_blipdownup.tt + self.gy_blipdownup.delay
+                ky_blip = _piecewise_linear_area_at_times(bdu_tt, self.gy_blipdownup.waveform, sample_times)
+                blip_total = _piecewise_linear_area_at_times(
+                    bdu_tt, self.gy_blipdownup.waveform, np.array([bdu_tt[-1]])
+                )[0]
+
+            ky = ky_base + ky_blip
+            ky_base_next = ky_base + blip_total
+        else:
+            raise NotImplementedError(f'Readout type "{self.readout_type}" is not supported.')
+
+        return kx, ky, ky_base_next
+
     def calculate_trajectory(self) -> tuple[np.ndarray, np.ndarray]:
         """Compute analytical k-space trajectory for the EPI readout.
 
@@ -400,63 +475,121 @@ class EpiReadout:
         # ADC sample times relative to the start of the gradient block (center of each dwell)
         sample_times = self.adc.delay + (np.arange(n_samples) + 0.5) * self.adc.dwell
 
-        # kx for a single readout line with positive gradient amplitude
-        kx_forward = _trapezoid_area_at_times(
-            self.gx.rise_time, self.gx.flat_time, self.gx.fall_time, abs(self.gx.amplitude), sample_times
-        )
-
-        # After gx_pre, kx starts at gx_pre.area
-        kx_offset = self.gx_pre.area
-
-        # ky: pre-phaser moves to top of k-space
-        ky_start = self.gy_pre.area
-
-        # For symmetric EPI, compute per-sample ky offset from the blip waveforms.
-        # tt is relative to the waveform start; add delay to get block-relative times.
-        if self.readout_type == 'symmetric':
-            assert self.gy_blipup is not None
-            assert self.gy_blipdown is not None
-            assert self.gy_blipdownup is not None
-            bu_tt = self.gy_blipup.tt + self.gy_blipup.delay
-            bd_tt = self.gy_blipdown.tt + self.gy_blipdown.delay
-            bdu_tt = self.gy_blipdownup.tt + self.gy_blipdownup.delay
-
-            ky_offset_blipup = _piecewise_linear_area_at_times(bu_tt, self.gy_blipup.waveform, sample_times)
-            ky_offset_blipdown = _piecewise_linear_area_at_times(bd_tt, self.gy_blipdown.waveform, sample_times)
-            ky_offset_blipdownup = _piecewise_linear_area_at_times(bdu_tt, self.gy_blipdownup.waveform, sample_times)
-
-            blipup_total = _piecewise_linear_area_at_times(bu_tt, self.gy_blipup.waveform, np.array([bu_tt[-1]]))[0]
-            blipdownup_total = _piecewise_linear_area_at_times(
-                bdu_tt, self.gy_blipdownup.waveform, np.array([bdu_tt[-1]])
-            )[0]
-
         kx = np.zeros((n_pe, n_samples))
         ky = np.zeros((n_pe, n_samples))
-
-        # Track cumulative ky base (ky value at the START of each block)
-        ky_base = ky_start
+        ky_base = self.gy_pre.area
 
         for pe_idx in range(n_pe):
-            if self.readout_type == 'flyback':
-                kx[pe_idx, :] = kx_offset + kx_forward
-                ky[pe_idx, :] = ky_start + pe_idx * self.gy_blip.area
-
-            elif self.readout_type == 'symmetric':
-                if pe_idx % 2 == 0:
-                    kx[pe_idx, :] = kx_offset + kx_forward
-                else:
-                    kx[pe_idx, :] = kx_offset + self.gx.area - kx_forward
-
-                if pe_idx == 0:
-                    ky[pe_idx, :] = ky_base + ky_offset_blipup
-                    ky_base += blipup_total
-                elif pe_idx == n_pe - 1:
-                    ky[pe_idx, :] = ky_base + ky_offset_blipdown
-                else:
-                    ky[pe_idx, :] = ky_base + ky_offset_blipdownup
-                    ky_base += blipdownup_total
+            kx[pe_idx, :], ky[pe_idx, :], ky_base = self._readout_block_kxy(pe_idx, sample_times, ky_base)
 
         return kx, ky
+
+    def calculate_full_trajectory(self, n_points_per_segment: int = 200) -> dict:
+        """Compute full analytical k-space trajectory including prephaser and transitions.
+
+        This extends ``calculate_trajectory()`` by also computing the k-space path during
+        the prephaser gradients and the transitions between readout lines (flyback gradients
+        or symmetric ramp transitions). Useful for visualization.
+
+        Parameters
+        ----------
+        n_points_per_segment
+            Number of densely sampled time points per gradient block for smooth trajectory lines.
+
+        Returns
+        -------
+        result
+            Dictionary with keys:
+
+            - ``'kx'``: full kx trajectory as 1-D array (1/m).
+            - ``'ky'``: full ky trajectory as 1-D array (1/m).
+            - ``'adc_indices'``: indices into kx/ky arrays that correspond to ADC samples.
+        """
+        n_samples = self.adc.num_samples
+        n_pe = self.n_phase_enc_total
+
+        all_kx: list[np.ndarray] = []
+        all_ky: list[np.ndarray] = []
+        adc_indices: list[int] = []
+        current_idx = 0
+
+        # --- Prephaser block ---
+        pre_dur = pp.calc_duration(self.gx_pre, self.gy_pre)
+        t_pre = np.linspace(0, pre_dur, n_points_per_segment, endpoint=False)
+        kx_pre = _trapezoid_area_at_times(
+            self.gx_pre.rise_time,
+            self.gx_pre.flat_time,
+            self.gx_pre.fall_time,
+            self.gx_pre.amplitude,
+            t_pre - self.gx_pre.delay,
+        )
+        ky_pre = _trapezoid_area_at_times(
+            self.gy_pre.rise_time,
+            self.gy_pre.flat_time,
+            self.gy_pre.fall_time,
+            self.gy_pre.amplitude,
+            t_pre - self.gy_pre.delay,
+        )
+        all_kx.append(kx_pre)
+        all_ky.append(ky_pre)
+        current_idx += len(t_pre)
+
+        # Current kx/ky offsets at the end of the prephaser
+        kx_offset = self.gx_pre.area
+        ky_base = self.gy_pre.area
+
+        for pe_idx in range(n_pe):
+            # --- Readout block (densely sampled) ---
+            block_dur = pp.calc_duration(self.gx)
+            t_block = np.linspace(0, block_dur, n_points_per_segment, endpoint=False)
+
+            kx_block, ky_block, ky_base = self._readout_block_kxy(pe_idx, t_block, ky_base)
+
+            all_kx.append(kx_block)
+            all_ky.append(ky_block)
+
+            # Record ADC sample indices
+            for s in range(n_samples):
+                adc_indices.append(current_idx + np.searchsorted(t_block, self.adc.delay + (s + 0.5) * self.adc.dwell))
+            current_idx += len(t_block)
+
+            # Flyback + blip transition block (flyback only)
+            if self.readout_type == 'flyback' and pe_idx < n_pe - 1:
+                assert self.gx_flyback is not None
+                fb_dur = pp.calc_duration(self.gx_flyback, self.gy_blip)
+                t_fb = np.linspace(0, fb_dur, n_points_per_segment // 2, endpoint=False)
+                # kx during flyback
+                kx_fb = (
+                    kx_offset
+                    + self.gx.area
+                    + _trapezoid_area_at_times(
+                        self.gx_flyback.rise_time,
+                        self.gx_flyback.flat_time,
+                        self.gx_flyback.fall_time,
+                        self.gx_flyback.amplitude,
+                        t_fb - self.gx_flyback.delay,
+                    )
+                )
+                # ky during flyback
+                ky_pre_blip = ky_base - self.gy_blip.area
+                ky_fb = ky_pre_blip + _trapezoid_area_at_times(
+                    self.gy_blip.rise_time,
+                    self.gy_blip.flat_time,
+                    self.gy_blip.fall_time,
+                    self.gy_blip.amplitude,
+                    t_fb - self.gy_blip.delay,
+                )
+                all_kx.append(kx_fb)
+                all_ky.append(ky_fb)
+                current_idx += len(t_fb)
+
+        kx_full = np.concatenate(all_kx)
+        ky_full = np.concatenate(all_ky)
+        adc_idx = np.array(adc_indices, dtype=int)
+        # Clip to valid range
+        adc_idx = np.clip(adc_idx, 0, len(kx_full) - 1)
+
+        return {'kx': kx_full, 'ky': ky_full, 'adc_indices': adc_idx}
 
     def add_to_seq(
         self,
@@ -530,16 +663,67 @@ class EpiReadout:
             ax.axvline(x=self.time_to_center, color='r', linestyle='--')
         plt.show()
 
-    def plot_trajectory(self):
-        """Plot k-space trajectory using the analytical expression."""
-        kx, ky = self.calculate_trajectory()
+    def plot_trajectory(self, show_adc: bool = True):
+        """Plot full k-space trajectory with color-coded direction.
 
-        fig = plt.figure()
-        plt.plot(kx.T, ky.T, 'b')
-        plt.plot(kx.ravel(), ky.ravel(), 'x', color='red', markersize=4)
-        plt.xlabel('kx (1/m)')
-        plt.ylabel('ky (1/m)')
-        plt.grid()
+        The trajectory is colored from start (dark) to end (bright) using the
+        copper colormap. Small arrows at the midpoint of each readout line
+        indicate the traversal direction. ADC sample positions are shown as
+        red markers.
+
+        Parameters
+        ----------
+        show_adc
+            If True, ADC sample positions are shown as red markers.
+
+        Returns
+        -------
+        fig
+            Matplotlib figure object.
+        """
+        from matplotlib.collections import LineCollection
+
+        traj = self.calculate_full_trajectory()
+        kx = traj['kx']
+        ky = traj['ky']
+        adc_idx = traj['adc_indices']
+
+        fig, ax = plt.subplots()
+
+        # Create line segments colored by traversal order
+        points = np.column_stack([kx, ky]).reshape(-1, 1, 2)
+        segments = np.concatenate([points[:-1], points[1:]], axis=1)
+        t = np.linspace(0, 1, len(segments))
+        lc = LineCollection(segments, cmap='copper', linewidth=1.0)
+        lc.set_array(t)
+        ax.add_collection(lc)
+
+        # ADC samples
+        if show_adc:
+            ax.plot(kx[adc_idx], ky[adc_idx], 'x', color='red', markersize=3, zorder=3)
+
+        # Direction arrows at the midpoint of each readout line
+        n_samples = self.adc.num_samples
+        for pe_idx in range(self.n_phase_enc_total):
+            start = pe_idx * n_samples
+            mid = start + n_samples // 2
+            kx_adc = kx[adc_idx]
+            ky_adc = ky[adc_idx]
+            dx = kx_adc[mid] - kx_adc[mid - 1]
+            dy = ky_adc[mid] - ky_adc[mid - 1]
+            ax.annotate(
+                '',
+                xy=(kx_adc[mid] + dx, ky_adc[mid] + dy),
+                xytext=(kx_adc[mid], ky_adc[mid]),
+                arrowprops={'arrowstyle': '->', 'color': 'blue', 'lw': 1.5},
+            )
+
+        ax.set_xlabel('kx (1/m)')
+        ax.set_ylabel('ky (1/m)')
+        ax.set_aspect('equal', adjustable='datalim')
+        ax.autoscale_view()
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
         plt.show()
 
         return fig
