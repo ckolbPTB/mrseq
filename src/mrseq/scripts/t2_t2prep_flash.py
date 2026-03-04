@@ -457,6 +457,10 @@ def main(
     output_path = Path.cwd() / 'output'
     output_path.mkdir(parents=True, exist_ok=True)
 
+    # delete existing header file
+    if (output_path / Path(filename + '_header.h5')).exists():
+        (output_path / Path(filename + '_header.h5')).unlink()
+
     seq, min_te, min_tr = t2_t2prep_flash_kernel(
         system=system,
         te=te,

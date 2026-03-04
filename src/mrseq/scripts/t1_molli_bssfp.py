@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import ismrmrd
 import numpy as np
 import pypulseq as pp
 
@@ -10,6 +11,11 @@ from mrseq.utils import find_gx_flat_time_on_adc_raster
 from mrseq.utils import round_to_raster
 from mrseq.utils import sys_defaults
 from mrseq.utils import write_sequence
+from mrseq.utils.ismrmrd import Fov
+from mrseq.utils.ismrmrd import Limits
+from mrseq.utils.ismrmrd import MatrixSize
+from mrseq.utils.ismrmrd import create_header
+from mrseq.utils.trajectory import MultiEchoAcquisition
 from mrseq.utils.trajectory import cartesian_phase_encoding
 
 
@@ -23,6 +29,7 @@ def t1_molli_bssfp_kernel(
     fov_xy: float,
     n_readout: int,
     readout_oversampling: float,
+    partial_echo_factor: float,
     acceleration: int,
     n_fully_sampled_center: int,
     slice_thickness: float,
@@ -38,6 +45,7 @@ def t1_molli_bssfp_kernel(
     rf_inv_spoil_flattime: float,
     rf_inv_mu: float,
     ge_segment_delay: float,
+    mrd_header_file: str | Path | None,
 ) -> tuple[pp.Sequence, float, float]:
     """Generate a 5(3)3 MOLLI sequence with bSSFP readout for cardiac T1 mapping.
 
@@ -63,6 +71,8 @@ def t1_molli_bssfp_kernel(
         Number of frequency encoding steps.
     readout_oversampling
         Readout oversampling factor, commonly 2. This reduces aliasing artifacts.
+    partial_echo_factor
+        Partial echo factor between 0 and 1, which reduces the echo time by acquiring only a part of the readout.
     acceleration
         Uniform undersampling factor along the phase encoding direction
     n_fully_sampled_center
@@ -93,6 +103,8 @@ def t1_molli_bssfp_kernel(
         Constant determining amplitude of frequency sweep of adiabatic inversion pulse
     ge_segment_delay
         Delay time at the end of each segment for GE scanners.
+    mrd_header_file
+        Filename of the ISMRMRD header file to be created. If None, no header file is created.
 
     Returns
     -------
@@ -104,6 +116,9 @@ def t1_molli_bssfp_kernel(
         Shortest possible echo time.
 
     """
+    if partial_echo_factor > 1 or partial_echo_factor < 0.5:
+        raise ValueError('Partial echo factor has to be within 0.5 and 1')
+
     # create PyPulseq Sequence object and set system limits
     seq = pp.Sequence(system=system)
 
@@ -126,33 +141,18 @@ def t1_molli_bssfp_kernel(
     )
 
     # create readout gradient and ADC
-    delta_k = 1 / fov_xy
-    gx = pp.make_trapezoid(channel='x', flat_area=n_readout * delta_k, flat_time=gx_flat_time, system=system)
-    n_readout_with_oversampling = int(n_readout * readout_oversampling)
-    n_readout_with_oversampling = n_readout_with_oversampling + np.mod(n_readout_with_oversampling, 2)  # make even
-    adc = pp.make_adc(num_samples=n_readout_with_oversampling, duration=gx.flat_time, delay=gx.rise_time, system=system)
-
-    print(f'Current receiver bandwidth = {1 / gx.flat_time:.0f} Hz/pixel')
-
-    # create frequency encoding pre- and re-winder gradient
-    # reduce slew rate because all three gradients are used at the same time
-    gx_pre = pp.make_trapezoid(
-        channel='x',
-        area=-gx.area / 2 - delta_k / 2,
-        duration=gx_pre_duration,
+    multi_echo_gradient = MultiEchoAcquisition(
         system=system,
-        max_slew=system.max_slew * 0.7,
+        delta_te=None,
+        fov=fov_xy,
+        n_readout=n_readout,
+        readout_oversampling=readout_oversampling,
+        partial_echo_factor=partial_echo_factor,
+        gx_flat_time=gx_flat_time,
+        gx_pre_duration=gx_pre_duration,
     )
-    gx_post = pp.make_trapezoid(
-        channel='x',
-        area=-gx.area / 2 + delta_k / 2,
-        duration=gx_pre_duration,
-        system=system,
-        max_slew=system.max_slew * 0.7,
-    )
-    k0_center_id = np.where((np.arange(n_readout_with_oversampling) - n_readout_with_oversampling / 2) * delta_k == 0)[
-        0
-    ][0]
+
+    print(f'Current receiver bandwidth = {1 / multi_echo_gradient._gx.flat_time:.0f} Hz/pixel')
 
     # create phase encoding steps
     pe_steps, pe_fully_sampled_center = cartesian_phase_encoding(
@@ -165,7 +165,7 @@ def t1_molli_bssfp_kernel(
     # phase encoding gradient for max ky position, reduce slew rate because all three gradients are on at the same time
     gy_pre_max = pp.make_trapezoid(
         channel='y',
-        area=delta_k * n_readout / 2,
+        area=1 / fov_xy * n_readout / 2,
         duration=gx_pre_duration,
         system=system,
         max_slew=system.max_slew * 0.7,
@@ -173,17 +173,19 @@ def t1_molli_bssfp_kernel(
 
     # calculate minimum echo time
     if te is None:
-        gzr_gx_dur = pp.calc_duration(gzr, gx_pre)  # gzr and gx_pre are applied simultaneously
+        gzr_gx_dur = pp.calc_duration(gzr, multi_echo_gradient._gx_pre)  # gzr and gx_pre are applied simultaneously
     else:
-        gzr_gx_dur = pp.calc_duration(gzr) + pp.calc_duration(gx_pre)  # gzr and gx_pre are applied sequentially
+        gzr_gx_dur = pp.calc_duration(gzr) + pp.calc_duration(
+            multi_echo_gradient._gx_pre
+        )  # gzr and gx_pre are applied sequentially
 
     min_te = (
         rf.shape_dur / 2  # time from center to end of RF pulse
         + max(rf.ringdown_time, gz.fall_time)  # RF ringdown time or gradient fall time
         + gzr_gx_dur  # slice selection re-phasing gradient and readout pre-winder
-        + gx.delay  # potential delay of readout gradient
-        + gx.rise_time  # rise time of readout gradient
-        + (k0_center_id + 0.5) * adc.dwell  # time from beginning of ADC to time point of k-space center sample
+        + multi_echo_gradient._gx.delay  # potential delay of readout gradient
+        + multi_echo_gradient._gx.rise_time  # rise time of readout gradient
+        + (multi_echo_gradient._n_readout_pre_echo + 0.5) * multi_echo_gradient._adc.dwell
     ).item()
 
     # calculate echo time delay (te_delay)
@@ -199,10 +201,9 @@ def t1_molli_bssfp_kernel(
     min_tr = (
         pp.calc_duration(gz)  # rf pulse
         + gzr_gx_dur  # slice selection re-phasing gradient and readout pre-winder
-        + pp.calc_duration(gx)  # readout gradient
-        + pp.calc_duration(gx_post)  # readout/phase rewinder
-        + pp.calc_duration(gzr)  # slice rewinder
-    )
+        + pp.calc_duration(multi_echo_gradient._gx)  # readout gradient
+        + pp.calc_duration(gzr, multi_echo_gradient._gx_post)  # gradient spoiler or readout-re-winder
+    ).item()
 
     # calculate repetition time delay (tr_delay)
     current_min_tr = min_tr + te_delay + ge_segment_delay
@@ -219,6 +220,23 @@ def t1_molli_bssfp_kernel(
     print(f'\nCurrent echo time = {current_te * 1000:.3f} ms')
     print(f'Current repetition time = {current_tr * 1000:.3f} ms')
     print(f'Acquisition window per cardiac cycle = {current_tr * len(pe_steps) * 1000:.3f} ms')
+
+    # create header
+    if mrd_header_file:
+        hdr = create_header(
+            traj_type='other',
+            encoding_fov=Fov(x=fov_xy, y=fov_xy, z=slice_thickness),
+            recon_fov=Fov(x=fov_xy, y=fov_xy, z=slice_thickness),
+            encoding_matrix=MatrixSize(n_x=int(n_readout * readout_oversampling), n_y=n_readout, n_z=1),
+            recon_matrix=MatrixSize(n_x=n_readout, n_y=n_readout, n_z=1),
+            dwell_time=multi_echo_gradient._adc.dwell,
+            k1_limits=Limits(min=0, max=len(pe_steps), center=0),
+            h1_resonance_freq=system.gamma * system.B0,
+        )
+
+        # write header to file
+        prot = ismrmrd.Dataset(mrd_header_file, 'w')
+        prot.write_xml_header(hdr.toXML('utf-8'))
 
     # create trigger soft delay (total duration: user_input/1.0 - min_cardiac_trigger_delay)
     if use_soft_delay:
@@ -325,10 +343,10 @@ def t1_molli_bssfp_kernel(
                     rf.signal = rf_signal
                 if np.mod(idx, 2) == 0:
                     rf.phase_offset = -np.pi
-                    adc.phase_offset = -np.pi
+                    multi_echo_gradient._adc.phase_offset = -np.pi
                 else:
                     rf.phase_offset = 0.0
-                    adc.phase_offset = 0.0
+                    multi_echo_gradient._adc.phase_offset = 0.0
                 seq.add_block(rf, gz, pp.make_label(type='SET', label='TRID', value=88 if idx < 0 else 1))
 
                 # set labels
@@ -340,17 +358,21 @@ def t1_molli_bssfp_kernel(
                 if te is not None:
                     seq.add_block(gzr)
                     seq.add_block(pp.make_delay(te_delay))
-                    seq.add_block(gx_pre, pp.scale_grad(gy_pre_max, pe_index_ / (n_readout / 2)))
+                    seq.add_block(multi_echo_gradient._gx_pre, pp.scale_grad(gy_pre_max, pe_index_ / (n_readout / 2)))
                 else:
-                    seq.add_block(gx_pre, pp.scale_grad(gy_pre_max, pe_index_ / (n_readout / 2)), gzr)
+                    seq.add_block(
+                        multi_echo_gradient._gx_pre, pp.scale_grad(gy_pre_max, pe_index_ / (n_readout / 2)), gzr
+                    )
 
                 # add the readout gradient and ADC
                 if idx >= 0:
-                    seq.add_block(gx, adc, *labels)
+                    seq.add_block(multi_echo_gradient._gx, multi_echo_gradient._adc, *labels)
                 else:
-                    seq.add_block(gx)
+                    seq.add_block(multi_echo_gradient._gx)
 
-                seq.add_block(gx_post, pp.scale_grad(gy_pre_max, -pe_index_ / (n_readout / 2)), gzr)
+                seq.add_block(
+                    multi_echo_gradient._gx_post, pp.scale_grad(gy_pre_max, -pe_index_ / (n_readout / 2)), gzr
+                )
 
                 # add delay in case TR > min_TR
                 if tr_delay > 0:
@@ -359,6 +381,22 @@ def t1_molli_bssfp_kernel(
                             round_to_raster(tr_delay - ge_segment_delay, raster_time=system.block_duration_raser)
                         )
                     )
+
+                if mrd_header_file and idx >= 0:
+                    # add acquisitions to metadata
+                    k0_trajectory = np.linspace(
+                        -multi_echo_gradient._n_readout_pre_echo,
+                        multi_echo_gradient._n_readout_post_echo,
+                        multi_echo_gradient._n_readout_with_partial_echo,
+                    )
+                    cart_trajectory = np.zeros((multi_echo_gradient._n_readout_with_partial_echo, 2), dtype=np.float32)
+                    cart_trajectory[:, 0] = k0_trajectory
+                    cart_trajectory[:, 1] = pe_steps[idx]
+
+                    acq = ismrmrd.Acquisition()
+                    acq.resize(trajectory_dimensions=2, number_of_samples=multi_echo_gradient._adc.num_samples)
+                    acq.traj[:] = cart_trajectory
+                    prot.append_acquisition(acq)
 
             contrast_index += 1
 
@@ -387,9 +425,14 @@ def t1_molli_bssfp_kernel(
         pp.make_label(label='SLC', type='SET', value=0),
         pp.make_label(type='SET', label='TRID', value=99),
     )
-    seq.add_block(adc, pp.make_label(label='NOISE', type='SET', value=True))
+    seq.add_block(multi_echo_gradient._adc, pp.make_label(label='NOISE', type='SET', value=True))
     seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))
     seq.add_block(pp.make_delay(system.rf_dead_time))
+
+    if mrd_header_file:
+        acq = ismrmrd.Acquisition()
+        acq.resize(trajectory_dimensions=2, number_of_samples=multi_echo_gradient._adc.num_samples)
+        prot.append_acquisition(acq)
 
     return seq, min_te, min_tr
 
@@ -403,6 +446,7 @@ def main(
     n_readout: int = 128,
     acceleration: int = 2,
     n_fully_sampled_center: int = 12,
+    partial_echo_factor: float = 1.0,
     slice_thickness: float = 8e-3,
     receiver_bandwidth_per_pixel: float = 1000,  # Hz/pixel
     show_plots: bool = True,
@@ -431,6 +475,8 @@ def main(
         Uniform undersampling factor along the phase encoding direction
     n_fully_sampled_center
         Number of phsae encoding points in the fully sampled center. This will reduce the overall undersampling factor.
+    partial_echo_factor
+        Partial echo factor between 0 and 1, which reduces the echo time by acquiring only a part of the readout.
     slice_thickness
         Slice thickness of the 2D slice (in meters).
     receiver_bandwidth_per_pixel
@@ -471,12 +517,11 @@ def main(
     rf_apodization = 0.5  # apodization factor of rf excitation pulse
     readout_oversampling = 2  # readout oversampling factor, commonly 2. This reduces aliasing artifacts.
 
+    # this is just approximately, the final calculation is done in the kernel
+    n_readout_with_oversampling = int(n_readout * readout_oversampling * partial_echo_factor)
     # define ADC and gradient timing
-    n_readout_with_oversampling = int(n_readout * readout_oversampling)
-    adc_dwell_time = round_to_raster(
-        1.0 / (receiver_bandwidth_per_pixel * n_readout_with_oversampling), system.adc_raster_time
-    )
-    gx_pre_duration = 0.72e-3  # duration of readout pre-winder gradient [s]
+    adc_dwell_time = 1.0 / (receiver_bandwidth_per_pixel * n_readout_with_oversampling)
+    gx_pre_duration = 0.8e-3  # duration of readout pre-winder gradient [s]
     gx_flat_time, adc_dwell_time = find_gx_flat_time_on_adc_raster(
         n_readout_with_oversampling, adc_dwell_time, system.grad_raster_time, system.adc_raster_time
     )
@@ -489,6 +534,10 @@ def main(
     output_path = Path.cwd() / 'output'
     output_path.mkdir(parents=True, exist_ok=True)
 
+    # delete existing header file
+    if (output_path / Path(filename + '_header.h5')).exists():
+        (output_path / Path(filename + '_header.h5')).unlink()
+
     seq, min_te, min_tr = t1_molli_bssfp_kernel(
         system=system,
         te=te,
@@ -500,6 +549,7 @@ def main(
         fov_xy=fov_xy,
         n_readout=n_readout,
         readout_oversampling=readout_oversampling,
+        partial_echo_factor=partial_echo_factor,
         acceleration=acceleration,
         n_fully_sampled_center=n_fully_sampled_center,
         slice_thickness=slice_thickness,
@@ -515,6 +565,7 @@ def main(
         rf_inv_spoil_flattime=rf_inv_spoil_flattime,
         rf_inv_mu=rf_inv_mu,
         ge_segment_delay=0.0,
+        mrd_header_file=output_path / Path(filename + '_header.h5'),
     )
 
     # check timing of the sequence
