@@ -694,7 +694,7 @@ class EpiReadout:
         points = np.column_stack([kx, ky]).reshape(-1, 1, 2)
         segments = np.concatenate([points[:-1], points[1:]], axis=1)
         t = np.linspace(0, 1, len(segments))
-        lc = LineCollection(segments, cmap='copper', linewidth=1.0)
+        lc = LineCollection(segments.tolist(), cmap='copper', linewidth=1.0)
         lc.set_array(t)
         ax.add_collection(lc)
 
