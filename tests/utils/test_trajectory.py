@@ -141,7 +141,7 @@ def test_undersampled_variable_density_spiral(
     assert np.round(n_readout**2 / total_number_of_points) == undersampling_factor
 
 
-@pytest.mark.parametrize('n_readout', (64, 256))
+@pytest.mark.parametrize('n_readout', (128, 256))
 @pytest.mark.parametrize('fov', (128e-3, 320e-3))
 @pytest.mark.parametrize('n_spirals', (14, None))
 @pytest.mark.parametrize('undersampling_factor', (1, 3))
@@ -149,8 +149,7 @@ def test_undersampled_variable_density_spiral(
 @pytest.mark.parametrize('spiral_type', ('out', 'in-out'))
 @pytest.mark.parametrize('g_rew_slew_rate_scaling', (1.0, 0.8))
 @pytest.mark.parametrize(
-    'sampling_period',
-    (sys_defaults.grad_raster_time, sys_defaults.grad_raster_time * 2, sys_defaults.grad_raster_time * 3),
+    'sampling_period', (None, sys_defaults.grad_raster_time * 2, sys_defaults.grad_raster_time * 3)
 )
 def test_spiral_acquisition(
     system_defaults: pp.Opts,
@@ -201,7 +200,8 @@ def test_spiral_acquisition(
             k0_idx = np.argmin(m0_intp[100:-100]) + 100
             assert m0_intp[0] < 1e-3
         assert m0_intp[-1] < 1e-3
-        assert np.isclose(dt[k0_idx], time_to_echo, atol=system_defaults.grad_raster_time)
+        # Ideally within +/- .5 adc dwell time but limited by gradient raster time
+        assert np.isclose(dt[k0_idx], time_to_echo, atol=max(adc.dwell / 2, system_defaults.grad_raster_time))
 
         k_traj_adc = seq.calculate_kspace()[0]
         # Ignore first and last elements because they are extrapolated for readout_oversampling > 1

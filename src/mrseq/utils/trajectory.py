@@ -426,22 +426,21 @@ def spiral_acquisition(
         f'FOV: {fov * fov_scaling_center:.3f} (k-sapce center) - {fov * fov_scaling_edge:.3f} (k-space edge)',
     )
 
-    # interpolate to gradient raster time
     intp_factor = sampling_period / system.grad_raster_time
-    orig_raster = np.linspace(0.5, len(grad) - 0.5, len(grad))
-    grad_raster = np.linspace(0.5 / intp_factor, len(grad) - 0.5 / intp_factor, int(len(grad) * intp_factor))
-    grad = np.interp(grad_raster, orig_raster, grad.real) + 1j * np.interp(grad_raster, orig_raster, grad.imag)
+    if intp_factor > 1:
+        # interpolate to gradient raster time
+        orig_raster = np.linspace(0.5, len(grad) - 0.5, len(grad))
+        grad_raster = np.linspace(0.5 / intp_factor, len(grad) - 0.5 / intp_factor, int(len(grad) * intp_factor))
+        grad = np.interp(grad_raster, orig_raster, grad)
 
     delta_angle = 2 * np.pi / n_spirals
-    n_samples_to_echo = 0.5
     if spiral_type == 'in-out':
-        n_samples_to_echo = len(traj)
         grad = np.concatenate((-np.asarray(grad * np.exp(1j * np.pi))[::-1], grad))
         traj = np.concatenate((np.asarray(traj * np.exp(1j * np.pi))[::-1], traj))
         delta_angle = delta_angle / 2
 
     # calculate ADC
-    n_readout_with_oversampling = len(traj) * readout_oversampling
+    n_readout_with_oversampling = int(len(traj) * readout_oversampling)
     adc_dwell_time = sampling_period / readout_oversampling
     adc = pp.make_adc(
         num_samples=n_readout_with_oversampling, dwell=adc_dwell_time, system=system, delay=system.adc_dead_time
@@ -451,6 +450,10 @@ def spiral_acquisition(
         np.linspace(0.5, len(traj) - 0.5, len(traj)),
         traj,
     )
+
+    n_samples_to_echo = 0.5
+    if spiral_type == 'in-out':
+        n_samples_to_echo = len(traj) // 2
 
     print(
         f'Receiver bandwidth: {int(1.0 / (adc_dwell_time * n_readout_with_oversampling))} Hz/pixel '
@@ -558,6 +561,6 @@ def spiral_acquisition(
     # times -1 to match pulseq trajectory calculation
     trajectory = -np.stack((np.asarray(traj_list).real, np.asarray(traj_list).imag), axis=-1)
 
-    time_to_echo = max_pre_duration + n_samples_to_echo * readout_oversampling * adc.dwell
+    time_to_echo = max_pre_duration + n_samples_to_echo * adc.dwell
 
     return gx_combined, gy_combined, adc, trajectory, time_to_echo
