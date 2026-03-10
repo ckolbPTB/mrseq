@@ -201,7 +201,7 @@ def wasabiti_gre_centric_kernel(
             pp.make_delay(
                 round_to_raster(t_recovery[rep_idx] - last_spoil_dur, raster_time=system.block_duration_raster)
             ),
-            pp.make_label(type='SET', label='TRID', value=33),
+            pp.make_label(type='SET', label='TRID', value=3333),
         )
 
         # update frequency offset of WASABI block pulse and add it to sequence
@@ -248,7 +248,7 @@ def wasabiti_gre_centric_kernel(
         pp.make_delay(0.1),
         pp.make_label(label='LIN', type='SET', value=0),
         pp.make_label(label='REP', type='SET', value=0),
-        pp.make_label(type='SET', label='TRID', value=99),
+        pp.make_label(type='SET', label='TRID', value=9999),
     )
     seq.add_block(adc, pp.make_label(label='NOISE', type='SET', value=True))
     seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))

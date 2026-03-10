@@ -1,5 +1,7 @@
 """Spin-lock T1rho preparation block."""
 
+import warnings
+
 import numpy as np
 import pypulseq as pp
 
@@ -52,6 +54,9 @@ def add_t1rho_prep(
     if system is None:
         system = sys_defaults
 
+    if spin_lock_time >= 1 or int(spin_lock_time * 1e3) != spin_lock_time * 1e3:
+        warnings.warn('TRID labels might not be unique for this spin_lock_time. Ignore if not using GE.', stacklevel=2)
+
     # create new sequence if not provided
     if seq is None:
         seq = pp.Sequence(system=system)
@@ -68,7 +73,7 @@ def add_t1rho_prep(
         system=system,
         use='preparation',
     )
-    seq.add_block(rf_pre, pp.make_label(type='SET', label='TRID', value=1090))
+    seq.add_block(rf_pre, pp.make_label(type='SET', label='TRID', value=int(19000 + spin_lock_time * 1e3)))
 
     # spin-lock pulse without phase offset
     # calculate flip angle of spin-lock block pulse because make_block_pulse does not support b1 amp argument

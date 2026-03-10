@@ -1,5 +1,7 @@
 """MLEV-4 type T2 preparation block."""
 
+import warnings
+
 import numpy as np
 import pypulseq as pp
 
@@ -139,6 +141,9 @@ def add_t2_prep(
     if system is None:
         system = sys_defaults
 
+    if echo_time >= 1 or int(echo_time * 1e3) != echo_time * 1e3:
+        warnings.warn('TRID labels might not be unique for this echo_time. Ignore if not using GE.', stacklevel=2)
+
     # create new sequence if not provided
     if seq is None:
         seq = pp.Sequence(system=system)
@@ -156,7 +161,7 @@ def add_t2_prep(
     )
 
     # add 90°x pulse to sequence
-    seq.add_block(rf_90, pp.make_label(type='SET', label='TRID', value=1080))
+    seq.add_block(rf_90, pp.make_label(type='SET', label='TRID', value=int(18000 + echo_time * 1e3)))
 
     # Calculate delay before 1st MLEV-4 refocusing pulse.
     # We have to calculate it manually because we need it before we add the 1st refocusing block to the sequence.

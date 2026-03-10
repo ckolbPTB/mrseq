@@ -233,7 +233,7 @@ def adc_tse_propeller_kernel(
     n_receiver_gain_calibration = 20
     for _ in range(n_receiver_gain_calibration):
         seq.add_block(
-            pp.make_label(type='SET', label='NAV', value=True), pp.make_label(type='SET', label='TRID', value=33)
+            pp.make_label(type='SET', label='NAV', value=True), pp.make_label(type='SET', label='TRID', value=3333)
         )
         _start_time_tr_block = sum(seq.block_durations.values())
         seq.add_block(rf_ex, gz_ex)
@@ -356,7 +356,7 @@ def adc_tse_propeller_kernel(
     seq.add_block(
         pp.make_label(label='LIN', type='SET', value=0),
         pp.make_label(label='SLC', type='SET', value=0),
-        pp.make_label(type='SET', label='TRID', value=99),
+        pp.make_label(type='SET', label='TRID', value=9999),
     )
     seq.add_block(adc, pp.make_label(label='NOISE', type='SET', value=True))
     seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))

@@ -22,6 +22,7 @@ def cartesian_flash_kernel(
     n_phase_encoding: int,
     n_slice_encoding: int,
     n_dummy_excitations: int,
+    n_repetitions: int,
     gx_pre_duration: float,
     gx_flat_time: float,
     rf_duration: float,
@@ -205,55 +206,61 @@ def cartesian_flash_kernel(
     rf_phase = 0.0
     rf_inc = 0.0
 
-    for se in range(n_slice_encoding):
-        n_dummy = n_dummy_excitations if se == 0 else 0
+    for rep in range(n_repetitions):
+        rep_label = pp.make_label(label='REP', type='SET', value=rep)
+        for se in range(n_slice_encoding):
+            n_dummy = n_dummy_excitations if (se == 0 and rep == 0) else 0
 
-        for pe in range(-n_dummy, n_phase_encoding):
-            # phase encoding along se and pe
-            if pe >= 0:
-                gz_pre = pp.scale_grad(gz_pre_max, (se - n_slice_encoding / 2) / (n_slice_encoding / 2))
-                se_label = pp.make_label(type='SET', label='PAR', value=int(se))
-                gy_pre = pp.scale_grad(gy_pre_max, (pe - n_phase_encoding / 2) / (n_phase_encoding / 2))
-                pe_label = pp.make_label(type='SET', label='LIN', value=int(pe))
-            else:
-                gz_pre = pp.scale_grad(gz_pre_max, 0)
-                se_label = pp.make_label(type='SET', label='PAR', value=0)
-                gy_pre = pp.scale_grad(gy_pre_max, 0)
-                pe_label = pp.make_label(type='SET', label='LIN', value=0)
+            for pe in range(-n_dummy, n_phase_encoding):
+                # phase encoding along se and pe
+                if pe >= 0:
+                    gz_pre = pp.scale_grad(gz_pre_max, (se - n_slice_encoding / 2) / (n_slice_encoding / 2))
+                    se_label = pp.make_label(type='SET', label='PAR', value=int(se))
+                    gy_pre = pp.scale_grad(gy_pre_max, (pe - n_phase_encoding / 2) / (n_phase_encoding / 2))
+                    pe_label = pp.make_label(type='SET', label='LIN', value=int(pe))
+                else:
+                    gz_pre = pp.scale_grad(gz_pre_max, 0)
+                    se_label = pp.make_label(type='SET', label='PAR', value=0)
+                    gy_pre = pp.scale_grad(gy_pre_max, 0)
+                    pe_label = pp.make_label(type='SET', label='LIN', value=0)
 
-            # calculate current phase_offset if rf_spoiling is activated
-            if rf_spoiling_phase_increment > 0:
-                rf.phase_offset = rf_phase / 180 * np.pi
-                adc.phase_offset = rf_phase / 180 * np.pi
+                # calculate current phase_offset if rf_spoiling is activated
+                if rf_spoiling_phase_increment > 0:
+                    rf.phase_offset = rf_phase / 180 * np.pi
+                    adc.phase_offset = rf_phase / 180 * np.pi
 
-            # add slice selective excitation pulse
-            seq.add_block(rf, gz, pp.make_label(type='SET', label='TRID', value=88 if pe < 0 else 1))
+                # add slice selective excitation pulse
+                seq.add_block(rf, gz, pp.make_label(type='SET', label='TRID', value=88 if pe < 0 else 1))
 
-            # update rf phase offset for the next excitation pulse
-            rf_inc = divmod(rf_inc + rf_spoiling_phase_increment, 360.0)[1]
-            rf_phase = divmod(rf_phase + rf_inc, 360.0)[1]
+                # update rf phase offset for the next excitation pulse
+                rf_inc = divmod(rf_inc + rf_spoiling_phase_increment, 360.0)[1]
+                rf_phase = divmod(rf_phase + rf_inc, 360.0)[1]
 
-            seq.add_block(gzr)
-            seq.add_block(pp.make_delay(te_delay))
-            seq.add_block(gx_pre, gy_pre, gz_pre)
+                seq.add_block(gzr)
+                seq.add_block(pp.make_delay(te_delay))
+                seq.add_block(gx_pre, gy_pre, gz_pre)
 
-            if pe >= 0:
-                seq.add_block(gx, adc, pe_label, se_label)
-            else:
-                seq.add_block(gx, pp.make_delay(pp.calc_duration(adc)))
+                if pe >= 0:
+                    seq.add_block(gx, adc, pe_label, se_label, rep_label)
+                else:
+                    seq.add_block(gx, pp.make_delay(pp.calc_duration(adc)))
 
-            seq.add_block(gx_post, pp.scale_grad(gy_pre, -1), gz_spoil)
+                seq.add_block(gx_post, pp.scale_grad(gy_pre, -1), gz_spoil)
 
-            # add delay in case TR > min_TR
-            if tr_delay > 0:
-                seq.add_block(pp.make_delay(tr_delay - ge_segment_delay))
+                # add delay in case TR > min_TR
+                if tr_delay > 0:
+                    seq.add_block(
+                        pp.make_delay(
+                            round_to_raster(tr_delay - ge_segment_delay, raster_time=system.block_duration_raster)
+                        )
+                    )
 
     # obtain noise samples
     seq.add_block(
         pp.make_delay(0.1),
         pp.make_label(label='LIN', type='SET', value=0),
         pp.make_label(label='SLC', type='SET', value=0),
-        pp.make_label(type='SET', label='TRID', value=99),
+        pp.make_label(type='SET', label='TRID', value=9999),
     )
     seq.add_block(adc, pp.make_label(label='NOISE', type='SET', value=True))
     seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))
@@ -354,6 +361,7 @@ def main(
         n_phase_encoding=n_phase_encoding,
         n_slice_encoding=n_slice_encoding,
         n_dummy_excitations=n_dummy_excitations,
+        n_repetitions=1,
         gx_pre_duration=gx_pre_duration,
         gx_flat_time=gx_flat_time,
         rf_duration=rf_duration,

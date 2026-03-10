@@ -367,8 +367,8 @@ def ismrmrd_from_sequence(adc_data_list: Sequence[np.ndarray], filename_seq: str
 
     n_readout = adc_data_list[0].shape[-1]
     num_channels = adc_data_list[0].shape[-2]
-    n_phase_encoding = max(adc_labels.get('LIN', 0)) - min(adc_labels.get('LIN', 0)) + 1
-    n_slice_encoding = max(adc_labels.get('PAR', 0)) - min(adc_labels.get('PAR', 0)) + 1
+    n_phase_encoding = max(adc_labels.get('LIN', (0,))) - min(adc_labels.get('LIN', (0,))) + 1
+    n_slice_encoding = max(adc_labels.get('PAR', (0,))) - min(adc_labels.get('PAR', (0,))) + 1
     hdr = create_header(
         traj_type='cartesian',
         encoding_fov=Fov(*sequence.get_definition('FOV').tolist()),
@@ -427,11 +427,14 @@ def ismrmrd_from_sequence(adc_data_list: Sequence[np.ndarray], filename_seq: str
         acq.slice_dir = (0.0, 0.0, 1.0)
 
         # Flags
-        if adc_labels.get('NAV', 0)[idx]:
+        if adc_labels.get('NAV')[idx] if 'NAV' in adc_labels else 0:
             acq.setFlag(ismrmrd.ACQ_IS_PHASECORR_DATA)
 
-        if adc_labels.get('NOISE', 0)[idx]:
+        if adc_labels.get('NOISE')[idx] if 'NOISE' in adc_labels else 0:
             acq.setFlag(ismrmrd.ACQ_IS_NOISE_MEASUREMENT)
+
+        if adc_labels.get('IMA')[idx] if 'IMA' in adc_labels else 0:
+            acq.setFlag(ismrmrd.ACQ_IS_PARALLEL_CALIBRATION_AND_IMAGING)
 
         ds.append_acquisition(acq)
 

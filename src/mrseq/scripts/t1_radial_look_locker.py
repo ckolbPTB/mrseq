@@ -300,7 +300,7 @@ def t1_radial_look_locker_kernel(
         pp.make_delay(0.1),
         pp.make_label(label='LIN', type='SET', value=0),
         pp.make_label(label='SLC', type='SET', value=0),
-        pp.make_label(type='SET', label='TRID', value=99),
+        pp.make_label(type='SET', label='TRID', value=9999),
     )
     seq.add_block(adc, pp.make_label(label='NOISE', type='SET', value=True))
     seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))
