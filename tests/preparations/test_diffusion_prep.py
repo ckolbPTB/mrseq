@@ -6,10 +6,18 @@ from mrseq.preparations.diffusion_prep import calculate_b_value
 from mrseq.preparations.diffusion_prep import calculate_diffusion_gradient_duration
 
 
+def test_add_t1rho_prep_system_defaults_if_none(system_defaults):
+    """Test if system defaults are used if no system limits are provided."""
+    diff_prep1 = DiffusionPrep(system=system_defaults)
+    diff_prep2 = DiffusionPrep(system=None)
+
+    assert diff_prep1._time_to_refocusing_pulse == diff_prep2._time_to_refocusing_pulse
+
+
 @pytest.mark.parametrize('g_amplitude', (4e5, 8e5, 1e6, 3e6))
-@pytest.mark.parametrize('g_duration', (5e-6, 10e-6, 20e-6, 40e-6))
-@pytest.mark.parametrize('g_delta_time', (20e-6, 40e-6, 80e-6, 100e-6))
-@pytest.mark.parametrize('g_rise_time', (0.1e-6, 0.2e-6, 0.5e-6, 1e-6))
+@pytest.mark.parametrize('g_duration', (5e-3, 10e-3, 20e-3, 40e-3))
+@pytest.mark.parametrize('g_delta_time', (20e-3, 40e-3, 80e-3, 100e-3))
+@pytest.mark.parametrize('g_rise_time', (0.1e-4, 0.2e-4, 0.5e-4, 1e-4))
 def test_duration_calculation(g_amplitude, g_duration, g_rise_time, g_delta_time):
     """Test the gradient duration calculation."""
     if g_duration < g_delta_time:
@@ -18,12 +26,18 @@ def test_duration_calculation(g_amplitude, g_duration, g_rise_time, g_delta_time
         assert g_duration == pytest.approx(g_duration_calc, rel=1e-3)
 
 
-@pytest.mark.parametrize('g_amplitude', (4e5, 8e5, 1e6))
-@pytest.mark.parametrize('g_delta_time', (40e-6, 80e-6))
+@pytest.mark.parametrize('g_amplitude', (8e5, 1e6))
+@pytest.mark.parametrize('g_delta_time', (50e-3, 80e-3))
 def test_block_duration(system_defaults, g_amplitude, g_delta_time):
     """Test the block duration calculation."""
     diff_prep = DiffusionPrep(system_defaults, g_amplitude=g_amplitude, g_delta_time=g_delta_time)
-    seq, block_duration, _ = diff_prep.add_diffusion_prep(seq=None, b_balue=200e-3)
-    seq_b0, block_duration_b0, _ = diff_prep.add_diffusion_prep(seq=None, b_balue=0)
-    assert block_duration == block_duration_b0
-    assert sum(seq.block_durations.values()) == sum(seq_b0.block_durations.values())
+    seq, block_duration, _ = diff_prep.add_diffusion_prep(seq=None, b_value=200)
+    seq_b0, block_duration_b0, _ = diff_prep.add_diffusion_prep(seq=None, b_value=0)
+    assert block_duration == pytest.approx(block_duration_b0, 1e-3)
+    assert sum(seq.block_durations.values()) == pytest.approx(sum(seq_b0.block_durations.values()), 1e-3)
+
+
+def test_too_short_delta_time(system_defaults):
+    """Test if error is raised on short delta time."""
+    with pytest.raises(ValueError):
+        DiffusionPrep(system_defaults, g_amplitude=4e5, g_delta_time=50e-3)

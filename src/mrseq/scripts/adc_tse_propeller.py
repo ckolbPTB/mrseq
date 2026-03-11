@@ -7,6 +7,7 @@ import ismrmrd
 import numpy as np
 import pypulseq as pp
 
+from mrseq.preparations.diffusion_prep import DiffusionPrep
 from mrseq.utils import round_to_raster
 from mrseq.utils import sys_defaults
 from mrseq.utils import write_sequence
@@ -38,8 +39,8 @@ def adc_tse_propeller_kernel(
     gz_crusher_duration: float,
     gz_crusher_area: float,
     ge_segment_delay: float,
-    g_diff_amplitude: np.ndarray,
-    g_diff_duration: float,
+    b_values: Sequence[float],
+    g_diff_max_amplitude: float,
     g_diff_delta_time: float,
     mrd_header_file: str | Path | None,
 ) -> tuple[pp.Sequence, float]:
@@ -87,10 +88,10 @@ def adc_tse_propeller_kernel(
         Duration of the crusher gradients applied around the 180° pulse.
     gz_crusher_area
         Area (zeroth gradient moment) of the crusher gradients applied around the 180° pulse.
-    g_diff_amplitude
-        Amplitudes of diffusion gradient for different b-values.
-    g_diff_duration
-        Duration of diffusion gradient.
+    b_values
+        b-values for diffusion weighting gradients in s/mm^2
+    g_diff_max_amplitude
+        Max amplitude of diffusion gradient.
     g_diff_delta_time
         Time between beginning of first and second diffusion gradient.
     ge_segment_delay
@@ -110,6 +111,11 @@ def adc_tse_propeller_kernel(
 
     # create PyPulseq Sequence object and set system limits
     seq = pp.Sequence(system=system)
+
+    # create diffusion gradient object
+    diff_prep = DiffusionPrep(
+        system, g_amplitude=g_diff_max_amplitude, g_delta_time=g_diff_delta_time, max_b_value=max(b_values)
+    )
 
     # create slice selective excitation pulse and gradient
     rf_ex, gz_ex, gzr_ex = pp.make_sinc_pulse(
@@ -276,8 +282,8 @@ def adc_tse_propeller_kernel(
     pe_idx = pe_idx[np.argsort(np.abs(pe_idx), kind='stable')]
 
     # add all events to the sequence
-    for dw in range(len(g_diff_amplitude)):
-        dw_label = pp.make_label(type='SET', label='ECO', value=int(dw))
+    for b_idx, b_value in enumerate(b_values):
+        dw_label = pp.make_label(type='SET', label='ECO', value=int(b_idx))
         for se in range(n_slice_encoding):
             se_label = pp.make_label(type='SET', label='PAR', value=int(se))
 
@@ -289,14 +295,12 @@ def adc_tse_propeller_kernel(
 
                 # calculate rotation angle for the current spoke
                 rotation_angle_rad = np.pi / n_blades * blade + np.pi / 13
+                # add excitation pulse
+                seq.add_block(rf_ex, gz_ex, pp.make_label(type='SET', label='TRID', value=1))
+                seq.add_block(gzr_ex)
+                seq.add_block(pp.make_delay(tau1))
 
-                if g_diff_amplitude[dw] == 0:
-                    # add excitation pulse
-                    seq.add_block(rf_ex, gz_ex, pp.make_label(type='SET', label='TRID', value=1))
-                    seq.add_block(gzr_ex)
-                    seq.add_block(pp.make_delay(tau1))
-                else:
-                    raise ValueError('Diff missing')
+                seq, _block_duration, _b_value_calc = diff_prep.add_diffusion_prep(seq, b_value=b_value)
 
                 for echo in range(n_echoes):
                     pe_label = pp.make_label(type='SET', label='LIN', value=int(blade * n_echoes + echo))
@@ -385,7 +389,7 @@ def main(
     n_phase_encoding: int = 128,
     phase_encoding_oversampling: float = 1.0,
     n_slice_encoding: int = 10,
-    b_values: float | Sequence[float] = 0,
+    b_values: Sequence[float] = [0, 200, 400, 800],
     show_plots: bool = True,
     test_report: bool = True,
     timing_check: bool = True,
@@ -449,14 +453,7 @@ def main(
 
     # diffusion gradients
     g_diff_delta_time = 5.5e-3
-    g_diff_duration = 1e-3
-    g_diff_amplitude = (0,)
-    # np.asarray(
-    #    [
-    #        np.sqrt(b * 1e6 / ((2 * np.pi) ** 2 * g_diff_duration**2 * (g_diff_delta_time - g_diff_duration / 3)))
-    #        for b in b_values
-    #    ]
-    # )
+    g_diff_max_amplitude = system.max_grad * 0.8
 
     # define sequence filename
     filename = f'{Path(__file__).stem}_{int(fov_xy * 1000)}fov_xy_{int(fov_z * 1000)}_fov_z_'
@@ -490,8 +487,8 @@ def main(
         readout_oversampling=readout_oversampling,
         gz_crusher_duration=gz_crusher_duration,
         gz_crusher_area=gz_crusher_area,
-        g_diff_amplitude=g_diff_amplitude,
-        g_diff_duration=g_diff_duration,
+        b_values=b_values,
+        g_diff_max_amplitude=g_diff_max_amplitude,
         g_diff_delta_time=g_diff_delta_time,
         ge_segment_delay=0.0,
         mrd_header_file=output_path / Path(filename + '_header.h5'),
