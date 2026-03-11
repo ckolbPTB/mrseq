@@ -12,6 +12,8 @@ from mrseq.utils.trajectory import cartesian_phase_encoding
 from mrseq.utils.trajectory import undersampled_variable_density_spiral
 from scipy.signal import argrelextrema
 
+from .gradient_waveforms import get_interp_waveform_for_gx_gy
+
 
 @pytest.mark.parametrize('n_phase_encoding', [50, 51, 100])
 @pytest.mark.parametrize('acceleration', [1, 2, 3, 4, 6])
@@ -86,44 +88,6 @@ def test_multi_gradient_echo(system_defaults):
     seq.add_block(rf)
     mecho = MultiEchoAcquisition(system=seq.system)
     seq, _ = mecho.add_to_seq(seq, n_echoes=3)
-
-
-def get_interp_waveform_for_gx_gy(seq: pp.Sequence, dt: np.ndarray | None = None, scale: float = 1.0):
-    """Interpolate gradient waveforms for the x and y axes.
-
-    Parameters
-    ----------
-    seq
-        The PyPulseq sequence object containing gradient waveforms.
-    dt
-        Desired time points for interpolation. If None, a default time array is generated.
-    scale
-        Scaling factor for the gradient waveforms. Default is 1.
-
-    Returns
-    -------
-    gx_waveform_intp
-        Interpolated gradient waveform for the x-axis.
-    gy_waveform_intp
-        Interpolated gradient waveform for the y-axis.
-    dt
-        Time points corresponding to the interpolated waveforms.
-    """
-    w = seq.waveforms_and_times()
-    gx_waveform = w[0][0][1] * scale
-    gx_waveform_time = w[0][0][0]
-
-    gy_waveform = w[0][1][1] * scale
-    gy_waveform_time = w[0][1][0]
-
-    if dt is None:
-        dt = np.arange(
-            min(gx_waveform_time[0], gy_waveform_time[0]), max(gx_waveform_time[-1], gy_waveform_time[-1]), step=1e-7
-        )
-    gx_waveform_intp = np.interp(dt, gx_waveform_time, gx_waveform)
-    gy_waveform_intp = np.interp(dt, gy_waveform_time, gy_waveform)
-
-    return gx_waveform_intp, gy_waveform_intp, dt
 
 
 @pytest.mark.parametrize('n_readout', (128, 256))
@@ -246,7 +210,10 @@ def test_multi_gradient_echo_error_on_short_delta_te(system_defaults):
 @pytest.mark.parametrize('readout_oversampling', [1, 1.5, 2])
 @pytest.mark.parametrize('n_readout', [64, 128, 200])
 @pytest.mark.parametrize('partial_echo_factor', [1.0, 0.8, 0.7])
-def test_multi_gradient_echo_timing(n_echoes, readout_oversampling, n_readout, partial_echo_factor, system_defaults):
+@pytest.mark.parametrize('polarity', ['positive', 'negative'])
+def test_multi_gradient_echo_timing(
+    n_echoes, readout_oversampling, n_readout, partial_echo_factor, polarity, system_defaults
+):
     """Test that zero crossing of gradient moment coincides with echo time and correct adc sample."""
     seq = pp.Sequence(system=system_defaults)
     mecho = MultiEchoAcquisition(
@@ -255,10 +222,7 @@ def test_multi_gradient_echo_timing(n_echoes, readout_oversampling, n_readout, p
         readout_oversampling=readout_oversampling,
         partial_echo_factor=partial_echo_factor,
     )
-    seq, time_to_echoes = mecho.add_to_seq(seq, n_echoes)
-    if n_echoes > 1:
-        # Ensure that the delta TE is the same between all echoes
-        assert len(np.unique(np.round(np.diff(time_to_echoes), decimals=6))) == 1
+    seq, time_to_echoes = mecho.add_to_seq(seq, n_echoes, polarity)
 
     # Get full waveform for readout gradient
     w = seq.waveforms_and_times()
@@ -273,7 +237,7 @@ def test_multi_gradient_echo_timing(n_echoes, readout_oversampling, n_readout, p
     k0_idx = argrelextrema(np.abs(m0_intp), np.less, order=100)[0]
 
     # Remove k0-crossings at the beginning and end of the block
-    k0_idx = np.array([ki for ki in k0_idx if (ki > 100 and ki < len(dt) - 100)])
+    k0_idx = np.asarray([ki for ki in k0_idx if (ki > 100 and ki < len(dt) - 100)])
 
     # Zero-crossing of the readout gradient should be within +/- .5 adc dwell time of the k-space center sample which is
     # the (_n_readout_pre_echo + 1)th sample. This should also be the same as the time_to_echo - time
