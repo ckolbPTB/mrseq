@@ -11,6 +11,7 @@ from mrseq.preparations.diffusion_prep import DiffusionPrep
 from mrseq.utils import round_to_raster
 from mrseq.utils import sys_defaults
 from mrseq.utils import write_sequence
+from mrseq.utils.constants import GOLDEN_ANGLE_HALF_CIRCLE
 from mrseq.utils.ismrmrd import Fov
 from mrseq.utils.ismrmrd import Limits
 from mrseq.utils.ismrmrd import MatrixSize
@@ -37,7 +38,6 @@ def adc_tse_propeller_kernel(
     rf_ref_width_scale_factor: float,
     readout_oversampling: int,
     gz_crusher_duration: float,
-    gz_crusher_area: float,
     ge_segment_delay: float,
     b_values: Sequence[float],
     g_diff_max_amplitude: float,
@@ -86,8 +86,6 @@ def adc_tse_propeller_kernel(
         Readout oversampling.
     gz_crusher_duration
         Duration of the crusher gradients applied around the 180° pulse.
-    gz_crusher_area
-        Area (zeroth gradient moment) of the crusher gradients applied around the 180° pulse.
     b_values
         b-values for diffusion weighting gradients in s/mm^2
     g_diff_max_amplitude
@@ -114,7 +112,14 @@ def adc_tse_propeller_kernel(
 
     # create diffusion gradient object
     diff_prep = DiffusionPrep(
-        system, g_amplitude=g_diff_max_amplitude, g_delta_time=g_diff_delta_time, max_b_value=max(b_values)
+        system,
+        rf_ref_duration=rf_ref_duration,
+        rf_ref_bwt=rf_ref_bwt,
+        rf_ref_width_scale_factor=rf_ref_width_scale_factor,
+        g_crusher_duration=gz_crusher_duration,
+        g_amplitude=g_diff_max_amplitude,
+        g_delta_time=g_diff_delta_time,
+        max_b_value=max(b_values),
     )
 
     # create slice selective excitation pulse and gradient
@@ -129,20 +134,6 @@ def adc_tse_propeller_kernel(
         system=system,
         return_gz=True,
         use='excitation',
-    )
-
-    # create slice selective refocusing pulse and gradient
-    rf_ref, gz_ref, _ = pp.make_sinc_pulse(
-        flip_angle=np.pi,
-        duration=rf_ref_duration,
-        slice_thickness=fov_z * rf_ref_width_scale_factor,
-        apodization=0.5,
-        phase_offset=np.pi / 2,
-        time_bw_product=rf_ref_bwt,
-        delay=system.rf_dead_time,  # delay should equal at least the dead time of the RF pulse
-        system=system,
-        return_gz=True,
-        use='refocusing',
     )
 
     # create readout gradient and ADC
@@ -169,22 +160,19 @@ def adc_tse_propeller_kernel(
         channel='z', area=1 / fov_z * n_slice_encoding / 2, duration=gx_pre_duration, system=system
     )
 
-    # create crusher gradients
-    gz_crush = pp.make_trapezoid(channel='z', system=system, area=gz_crusher_area, duration=gz_crusher_duration)
-
     # calculate minimum delays
     # tau1: between excitation pulse and first refocusing pulse
     min_tau1 = rf_ex.shape_dur / 2
     min_tau1 += max(rf_ex.ringdown_time, gz_ex.fall_time)
     min_tau1 += pp.calc_duration(gzr_ex)
-    min_tau1 += pp.calc_duration(gz_crush)
-    min_tau1 += max(rf_ref.delay, gz_ref.delay + gz_ref.rise_time)
-    min_tau1 += rf_ref.shape_dur / 2
+    min_tau1 += diff_prep._time_to_refocusing_pulse
+    min_tau1 += max(diff_prep._rf_ref.delay, diff_prep._gz_ref.delay + diff_prep._gz_ref.rise_time)
+    min_tau1 += diff_prep._rf_ref.shape_dur / 2
 
-    # tau2: between refocusing pulses and readout
-    min_tau2 = rf_ref.shape_dur / 2
-    min_tau2 += max(rf_ref.ringdown_time, gz_ref.fall_time)
-    min_tau2 += pp.calc_duration(gz_crush)
+    # tau2: between first refocusing pulse and readout
+    min_tau2 = diff_prep._rf_ref.shape_dur / 2
+    min_tau2 += max(diff_prep._rf_ref.ringdown_time, diff_prep._gz_ref.fall_time)
+    min_tau2 += diff_prep._time_to_refocusing_pulse
     min_tau2 += pp.calc_duration(gx_pre)
     min_tau2 += k0_center_id * adc.dwell
     min_tau2 += adc.dwell / 2
@@ -195,14 +183,24 @@ def adc_tse_propeller_kernel(
     min_tau3 -= adc.dwell / 2
     min_tau3 += max(gx.fall_time, adc.dead_time)
     min_tau3 += pp.calc_duration(gx_post)
-    min_tau3 += pp.calc_duration(gz_crush)
-    min_tau3 += max(rf_ref.delay, gz_ref.delay + gz_ref.rise_time)
-    min_tau3 += rf_ref.shape_dur / 2
+    min_tau3 += pp.calc_duration(diff_prep._g_crush)
+    min_tau3 += max(diff_prep._rf_ref.delay, diff_prep._gz_ref.delay + diff_prep._gz_ref.rise_time)
+    min_tau3 += diff_prep._rf_ref.shape_dur / 2
+
+    # tau4: between refocusing pulses (no diffusion gradient) and readout
+    min_tau4 = diff_prep._rf_ref.shape_dur / 2
+    min_tau4 += max(diff_prep._rf_ref.ringdown_time, diff_prep._gz_ref.fall_time)
+    min_tau4 += pp.calc_duration(diff_prep._g_crush)
+    min_tau4 += pp.calc_duration(gx_pre)
+    min_tau4 += k0_center_id * adc.dwell
+    min_tau4 += adc.dwell / 2
+    min_tau4 += max(adc.delay, gx.delay + gx.rise_time)
 
     min_te = 2 * max(
         round_to_raster(min_tau1, system.block_duration_raster),
         round_to_raster(min_tau2, system.block_duration_raster),
         round_to_raster(min_tau3, system.block_duration_raster),
+        round_to_raster(min_tau4, system.block_duration_raster),
     )
 
     # calculate echo time delay (te_delay)
@@ -213,6 +211,7 @@ def adc_tse_propeller_kernel(
     tau1 = round_to_raster(te / 2 - min_tau1, raster_time=system.grad_raster_time)
     tau2 = round_to_raster(te / 2 - min_tau2, raster_time=system.grad_raster_time)
     tau3 = round_to_raster(te / 2 - min_tau3, raster_time=system.grad_raster_time)
+    tau4 = round_to_raster(te / 2 - min_tau4, raster_time=system.grad_raster_time)
     print(f'\nCurrent echo time = {(te) * 1000:.3f} ms')
 
     # create header
@@ -235,45 +234,6 @@ def adc_tse_propeller_kernel(
         prot = ismrmrd.Dataset(mrd_header_file, 'w')
         prot.write_xml_header(hdr.toXML('utf-8'))
 
-    # recceiver gain calibration (needed for GE scanners)
-    n_receiver_gain_calibration = 20
-    for _ in range(n_receiver_gain_calibration):
-        seq.add_block(
-            pp.make_label(type='SET', label='NAV', value=True), pp.make_label(type='SET', label='TRID', value=3333)
-        )
-        _start_time_tr_block = sum(seq.block_durations.values())
-        seq.add_block(rf_ex, gz_ex)
-        seq.add_block(gzr_ex)
-        seq.add_block(pp.make_delay(tau1))
-
-        # add refocusing pulse with crusher gradients
-        seq.add_block(gz_crush)
-        seq.add_block(rf_ref, gz_ref)
-        seq.add_block(gz_crush)
-
-        seq.add_block(pp.make_delay(tau2))
-
-        # add pre gradients
-        seq.add_block(gx_pre)
-
-        # readout gradient and adc
-        seq.add_block(gx, adc)
-
-        # rewind gradients
-        seq.add_block(gx_post)
-
-        duration_tr_block = sum(seq.block_durations.values()) - _start_time_tr_block
-        tr_delay = round_to_raster(tr - duration_tr_block - ge_segment_delay, system.block_duration_raster)
-        if tr_delay < 0:
-            raise ValueError('Desired TR too short for given sequence parameters.')
-        seq.add_block(pp.make_delay(tr_delay))
-        seq.add_block(pp.make_label(type='SET', label='NAV', value=False))
-
-        if mrd_header_file:
-            acq = ismrmrd.Acquisition()
-            acq.resize(trajectory_dimensions=3, number_of_samples=adc.num_samples)
-            prot.append_acquisition(acq)
-
     # low-high acquisition within each blade
     if np.mod(n_echoes, 2) == 1:
         pe_idx = np.arange(-(n_echoes - 1) // 2, (n_echoes + 1) // 2)
@@ -294,13 +254,14 @@ def adc_tse_propeller_kernel(
                 _start_time_tr_block = sum(seq.block_durations.values())
 
                 # calculate rotation angle for the current spoke
-                rotation_angle_rad = np.pi / n_blades * blade + np.pi / 13
+                rotation_angle_rad = GOLDEN_ANGLE_HALF_CIRCLE * (blade + 1)
                 # add excitation pulse
                 seq.add_block(rf_ex, gz_ex, pp.make_label(type='SET', label='TRID', value=1))
                 seq.add_block(gzr_ex)
                 seq.add_block(pp.make_delay(tau1))
 
                 seq, _block_duration, _b_value_calc = diff_prep.add_diffusion_prep(seq, b_value=b_value)
+                seq.add_block(pp.make_delay(tau2))
 
                 for echo in range(n_echoes):
                     pe_label = pp.make_label(type='SET', label='LIN', value=int(blade * n_echoes + echo))
@@ -308,13 +269,6 @@ def adc_tse_propeller_kernel(
                     # phase encoding along pe
                     pe_step = pe_idx[echo]
                     gy_pre = pp.scale_grad(gy_pre_max, pe_step / (n_readout / 2))
-
-                    # add refocusing pulse with crusher gradients
-                    seq.add_block(gz_crush)
-                    seq.add_block(rf_ref, gz_ref)
-                    seq.add_block(gz_crush)
-
-                    seq.add_block(pp.make_delay(tau2))
 
                     # add pre gradients and all labels
                     labels = [se_label, pe_label, dw_label]
@@ -331,6 +285,13 @@ def adc_tse_propeller_kernel(
 
                     if echo < n_echoes - 1:
                         seq.add_block(pp.make_delay(tau3))
+
+                        # add refocusing pulse with crusher gradients
+                        seq.add_block(diff_prep._g_crush)
+                        seq.add_block(diff_prep._rf_ref, diff_prep._gz_ref)
+                        seq.add_block(diff_prep._g_crush)
+
+                        seq.add_block(pp.make_delay(tau4))
 
                     if mrd_header_file:
                         # add acquisitions to metadata
@@ -389,7 +350,7 @@ def main(
     n_phase_encoding: int = 128,
     phase_encoding_oversampling: float = 1.0,
     n_slice_encoding: int = 10,
-    b_values: Sequence[float] = [0, 200, 400, 800],
+    b_values: Sequence[float] = [400, 0, 200, 400, 600],
     show_plots: bool = True,
     test_report: bool = True,
     timing_check: bool = True,
@@ -443,7 +404,6 @@ def main(
     gx_flat_time = n_readout * adc_dwell  # flat time of readout gradient [s]
 
     gz_crusher_duration = 1.6e-3  # duration of crusher gradients [s]
-    gz_crusher_area = 4 / (fov_z / n_slice_encoding)
 
     # define settings of rf excitation pulse
     rf_ex_duration = 2e-3  # duration of the rf excitation pulse [s]
@@ -452,7 +412,7 @@ def main(
     rf_ref_width_scale_factor = 3.5  # width of refocusing pulse is increased compared to excitation pulse
 
     # diffusion gradients
-    g_diff_delta_time = 5.5e-3
+    g_diff_delta_time = 40e-3
     g_diff_max_amplitude = system.max_grad * 0.8
 
     # define sequence filename
@@ -486,7 +446,6 @@ def main(
         rf_ref_width_scale_factor=rf_ref_width_scale_factor,
         readout_oversampling=readout_oversampling,
         gz_crusher_duration=gz_crusher_duration,
-        gz_crusher_area=gz_crusher_area,
         b_values=b_values,
         g_diff_max_amplitude=g_diff_max_amplitude,
         g_diff_delta_time=g_diff_delta_time,

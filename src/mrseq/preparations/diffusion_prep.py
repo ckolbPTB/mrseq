@@ -212,6 +212,7 @@ class DiffusionPrep:
         )
 
         self._time_to_refocusing_pulse = pp.calc_duration(self._g_diff)
+        self._time_to_refocusing_pulse += self._time_between_diff_and_rf
         self._time_to_refocusing_pulse += max(self._rf_ref.delay, self._gz_ref.delay + self._gz_ref.rise_time)
         self._time_to_refocusing_pulse += self._rf_ref.shape_dur / 2
 
