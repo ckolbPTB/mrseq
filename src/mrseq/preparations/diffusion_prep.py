@@ -123,7 +123,8 @@ class DiffusionPrep:
         g_amplitude: float | None = None,
         max_b_value: float = 500,
         g_delta_time: float = 50e-3,
-        g_channel: Literal['x', 'y', 'z'] = 'x',
+        g_channel: Literal['x', 'y', 'z', 'xy', 'yz', 'xz', 'xyz'] = 'x',
+        g_sign: Literal[-1, 1] = 1,
         g_crusher_duration=1.6e-3,
     ):
         """
@@ -132,7 +133,7 @@ class DiffusionPrep:
         Parameters
         ----------
         system
-        PyPulseq system limit object.
+            PyPulseq system limit object.
         fov_z
             FOV along the slice direction.
         rf_ref_duration
@@ -148,7 +149,9 @@ class DiffusionPrep:
         g_delta_time
             Time between beginning of first and second diffusion gradient. If None, the shortest possible time is used.
         g_channel
-            Axis of the diffusion gradient
+            Axis of the diffusion gradients
+        g_sign
+            Sign of the gradient amplitude, i.e. positive or negative gradient
         g_crusher_duration
             Duration of crusher gradient for b-value = 0
         """
@@ -161,13 +164,18 @@ class DiffusionPrep:
 
         # Calculate duration based on highest b-value
         self._g_duration = round_to_raster(
-            calculate_diffusion_gradient_duration(max_b_value, g_amplitude, g_delta_time),
-            raster_time=self._system.block_duration_raster,
+            calculate_diffusion_gradient_duration(max_b_value, g_amplitude * np.sqrt(len(g_channel)), g_delta_time),
+            raster_time=self._system.grad_raster_time,
         )
 
-        self._g_diff = pp.make_trapezoid(
-            channel=g_channel, system=self._system, amplitude=g_amplitude, duration=self._g_duration
-        )
+        self._g_diff = []
+        for channel in ['x', 'y', 'z']:
+            if channel in g_channel:
+                self._g_diff.append(
+                    pp.make_trapezoid(
+                        channel=channel, system=self._system, amplitude=g_amplitude * g_sign, duration=self._g_duration
+                    )
+                )
 
         # Refousing pulse
         self._rf_ref, self._gz_ref, _ = pp.make_sinc_pulse(
@@ -187,33 +195,33 @@ class DiffusionPrep:
 
         # Crusher gradient for b_value == 0
         self._g_crush = pp.make_trapezoid(
-            channel=g_channel, system=self._system, amplitude=g_amplitude, duration=g_crusher_duration
+            channel='z', system=self._system, amplitude=g_amplitude, duration=g_crusher_duration
         )
 
         # Calculate timings
         self.g_delta_time_ = g_delta_time
-        min_g_delta_time = pp.calc_duration(self._g_diff) + pp.calc_duration(self._rf_ref, self._gz_ref)
+        min_g_delta_time = pp.calc_duration(*self._g_diff) + pp.calc_duration(self._rf_ref, self._gz_ref)
         if min_g_delta_time > g_delta_time:
             raise ValueError('Time between diffusion gradients is too short to fit in refocusing pulse.')
         self._time_between_diff_and_rf = round_to_raster(
             g_delta_time - min_g_delta_time, raster_time=self._system.block_duration_raster
         )
         self._delay_before_crush = round_to_raster(
-            pp.calc_duration(self._g_diff) - pp.calc_duration(self._g_crush) + self._time_between_diff_and_rf,
+            pp.calc_duration(*self._g_diff) - pp.calc_duration(self._g_crush) + self._time_between_diff_and_rf,
             raster_time=self._system.block_duration_raster,
         )
         self._delay_after_crush = round_to_raster(
-            pp.calc_duration(self._g_diff) - pp.calc_duration(self._g_crush),
+            pp.calc_duration(*self._g_diff) - pp.calc_duration(self._g_crush),
             raster_time=self._system.block_duration_raster,
         )
 
-        self._time_to_refocusing_pulse = pp.calc_duration(self._g_diff)
+        self._time_to_refocusing_pulse = pp.calc_duration(*self._g_diff)
         self._time_to_refocusing_pulse += self._time_between_diff_and_rf
         self._time_to_refocusing_pulse += max(self._rf_ref.delay, self._gz_ref.delay + self._gz_ref.rise_time)
         self._time_to_refocusing_pulse += self._rf_ref.shape_dur / 2
 
         self._block_duration = (
-            2 * pp.calc_duration(self._g_diff)
+            2 * pp.calc_duration(*self._g_diff)
             + self._time_between_diff_and_rf
             + pp.calc_duration(self._rf_ref, self._gz_ref)
         )
@@ -240,12 +248,15 @@ class DiffusionPrep:
 
         # Add diffusion gradient
         if b_value > 0:
-            g_current_diff = pp.scale_grad(self._g_diff, np.sqrt(b_value / self._max_b_value))
-            seq.add_block(g_current_diff)
+            g_current_diff = [pp.scale_grad(g, np.sqrt(b_value / self._max_b_value)) for g in self._g_diff]
+            seq.add_block(*g_current_diff)
             seq.add_block(pp.make_delay(self._time_between_diff_and_rf))
 
             b_value = calculate_b_value(
-                g_current_diff.amplitude, self._g_duration, g_current_diff.rise_time, self.g_delta_time_
+                g_current_diff[0].amplitude * np.sqrt(len(g_current_diff)),
+                self._g_duration,
+                g_current_diff[0].rise_time,
+                self.g_delta_time_,
             )
         else:
             seq.add_block(pp.make_delay(self._delay_before_crush))
@@ -255,7 +266,7 @@ class DiffusionPrep:
         seq.add_block(self._rf_ref, self._gz_ref)
 
         if b_value > 0:
-            seq.add_block(g_current_diff)
+            seq.add_block(*g_current_diff)
         else:
             seq.add_block(self._g_crush)
             seq.add_block(pp.make_delay(self._delay_after_crush))
