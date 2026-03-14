@@ -310,7 +310,7 @@ def adc_epi2d_se_kernel(
                     seq.add_block(pp.make_delay(te_delay1))
 
                 # add diffusion gradient and refocusing pulse
-                seq, _block_duration, b_value_calc = diff_prep.add_diffusion_prep(seq, b_value=b_value)
+                seq, b_value_calc = diff_prep.add_diffusion_prep(seq, b_value=b_value)
 
                 if te_delay2 > 0:
                     seq.add_block(pp.make_delay(te_delay2))

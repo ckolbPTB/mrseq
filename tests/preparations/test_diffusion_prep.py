@@ -31,11 +31,10 @@ def test_duration_calculation(g_amplitude, g_duration, g_rise_time, g_delta_time
 def test_block_duration(system_defaults, g_amplitude, g_delta_time):
     """Test the block duration calculation."""
     diff_prep = DiffusionPrep(system_defaults, g_amplitude=g_amplitude, g_delta_time=g_delta_time)
-    seq, block_duration, _ = diff_prep.add_diffusion_prep(seq=None, b_value=200)
-    seq_b0, block_duration_b0, _ = diff_prep.add_diffusion_prep(seq=None, b_value=0)
-    assert block_duration == pytest.approx(block_duration_b0, 1e-3)
+    seq, _ = diff_prep.add_diffusion_prep(seq=None, b_value=200)
+    seq_b0, _ = diff_prep.add_diffusion_prep(seq=None, b_value=0)
     assert sum(seq.block_durations.values()) == pytest.approx(sum(seq_b0.block_durations.values()), 1e-3)
-    assert 2 * diff_prep._time_to_refocusing_pulse == pytest.approx(block_duration_b0, 1e-3)
+    assert sum(seq.block_durations.values()) == pytest.approx(diff_prep._block_duration, 1e-3)
 
 
 def test_too_short_delta_time(system_defaults):

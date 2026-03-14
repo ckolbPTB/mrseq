@@ -260,7 +260,7 @@ def adc_tse_propeller_kernel(
                 seq.add_block(gzr_ex)
                 seq.add_block(pp.make_delay(tau1))
 
-                seq, _block_duration, _b_value_calc = diff_prep.add_diffusion_prep(seq, b_value=b_value)
+                seq, _b_value_calc = diff_prep.add_diffusion_prep(seq, b_value=b_value)
                 seq.add_block(pp.make_delay(tau2))
 
                 for echo in range(n_echoes):
