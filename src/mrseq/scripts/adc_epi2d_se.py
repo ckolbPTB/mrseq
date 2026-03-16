@@ -42,6 +42,7 @@ def adc_epi2d_se_kernel(
     b_values: Sequence[float],
     g_diff_max_amplitude: float,
     g_diff_delta_time: float,
+    ge_segment_delay: float,
     mrd_header_file: str | Path | None,
 ) -> tuple[pp.Sequence, float, float]:
     """Generate a 2D Echo Planar Imaging (EPI) sequence for ADC mapping..
@@ -106,13 +107,20 @@ def adc_epi2d_se_kernel(
         Shortest possible repetition time.
 
     """
+    # Direction and sign of diffusion gradients
+    diff_directions = ['xy', 'yz', 'xz', 'xy', 'yz', 'xz']
+    diff_sign = [1, 1, 1, -1, -1, -1]
+
+    # Time delay between second diffusion gradient and adc to minimize impact of eddy currents
+    t_diff_gradient_adc = 1e-3
+
     # create PyPulseq Sequence object and set system limits
     seq = pp.Sequence(system=system)
 
     # define number of navigator acquisitions
     n_navigator_acq = 3
 
-    # create diffusion gradient object
+    # create diffusion gradient object for timing calculations
     diff_prep = DiffusionPrep(
         system,
         rf_ref_duration=rf_ex_duration * 2,
@@ -122,6 +130,8 @@ def adc_epi2d_se_kernel(
         g_amplitude=g_diff_max_amplitude,
         g_delta_time=g_diff_delta_time,
         max_b_value=max(b_values),
+        g_channel='xy',
+        g_sign=1,
     )
 
     # create EpiReadout object
@@ -163,7 +173,8 @@ def adc_epi2d_se_kernel(
         t_exc_to_ref += pp.calc_duration(gzr, epi2d.gx_pre, epi2d.gy_pre)
     t_exc_to_ref += diff_prep._time_to_refocusing_pulse
 
-    t_ref_to_kcenter = diff_prep._time_to_refocusing_pulse
+    t_ref_to_kcenter = diff_prep._block_duration - diff_prep._time_to_refocusing_pulse
+    t_ref_to_kcenter += t_diff_gradient_adc
     t_ref_to_kcenter += epi2d.time_to_center_without_prephaser
 
     # calculate minimum echo time
@@ -171,7 +182,7 @@ def adc_epi2d_se_kernel(
 
     # calculate echo time delays for minimum echo time
     te_delay1 = round_to_raster(min_te / 2 - t_exc_to_ref, system.block_duration_raster)
-    te_delay2 = round_to_raster(min_te / 2 - t_ref_to_kcenter, system.block_duration_raster)
+    te_delay2 = round_to_raster(min_te / 2 - t_ref_to_kcenter + t_diff_gradient_adc, system.block_duration_raster)
 
     if te is not None:
         if te > min_te:
@@ -205,8 +216,8 @@ def adc_epi2d_se_kernel(
         if tr_delay < 0:
             raise ValueError(f'TR must be larger than {min_tr * 1000:.2f} ms. Current value is {tr * 1000:.3f} ms.')
 
-    print(f'\nCurrent echo time = {(t_exc_to_ref + t_ref_to_kcenter) * 1000:.4f} ms')
-    print(f'Current repetition time = {(min_tr + tr_delay) * 1000:.4f} ms')
+    print(f'\nCurrent echo time = {(t_exc_to_ref + t_ref_to_kcenter) * 1000:.3f} ms')
+    print(f'Current repetition time = {(min_tr + tr_delay) * 1000:.3f} ms')
 
     # create header
     prot = None
@@ -239,6 +250,20 @@ def adc_epi2d_se_kernel(
     b_values_calculated = []
     for rep in range(n_repetitions):
         rep_label = pp.make_label(type='SET', label='REP', value=int(rep))
+
+        diff_prep = DiffusionPrep(
+            system,
+            rf_ref_duration=rf_ex_duration * 2,
+            rf_ref_bwt=rf_ex_bwt,
+            rf_ref_width_scale_factor=2,
+            g_crusher_duration=gz_crusher_duration,
+            g_amplitude=g_diff_max_amplitude,
+            g_delta_time=g_diff_delta_time,
+            max_b_value=max(b_values),
+            g_channel=diff_directions[np.mod(rep, len(diff_directions))],
+            g_sign=diff_sign[np.mod(rep, len(diff_directions))],
+        )
+
         for b_idx, b_value in enumerate(b_values):
             dw_label = pp.make_label(type='SET', label='ECO', value=int(b_idx))
 
@@ -250,7 +275,9 @@ def adc_epi2d_se_kernel(
                 rf.freq_offset = gz.amplitude * slice_thickness * (slice_ - (n_slices - 1) / 2)
 
                 # add slice selective excitation pulse and set slice label
-                seq.add_block(rf, gz, slice_label, dw_label, rep_label)
+                seq.add_block(
+                    rf, gz, slice_label, dw_label, rep_label, pp.make_label(type='SET', label='TRID', value=100 + rep)
+                )
 
                 # add navigator scans for ghost correction
                 if n_navigator_acq > 0:
@@ -312,8 +339,7 @@ def adc_epi2d_se_kernel(
                 # add diffusion gradient and refocusing pulse
                 seq, b_value_calc = diff_prep.add_diffusion_prep(seq, b_value=b_value)
 
-                if te_delay2 > 0:
-                    seq.add_block(pp.make_delay(te_delay2))
+                seq.add_block(pp.make_delay(te_delay2), pp.make_label(type='SET', label='TRID', value=1))
 
                 # add EPI readout block without pre-phaser gradients
                 # (trajectory is written per-readout inside add_to_seq when mrd_dataset is provided)
@@ -328,8 +354,10 @@ def adc_epi2d_se_kernel(
 
     # obtain noise samples if selected
     seq.add_block(
+        pp.make_delay(0.1),
         pp.make_label(label='LIN', type='SET', value=0),
         pp.make_label(label='SLC', type='SET', value=0),
+        pp.make_label(type='SET', label='TRID', value=9999),
         pp.make_label(label='NOISE', type='SET', value=True),
     )
     seq.add_block(
@@ -501,6 +529,7 @@ def main(
         b_values=b_values,
         g_diff_max_amplitude=g_diff_max_amplitude,
         g_diff_delta_time=g_diff_delta_time,
+        ge_segment_delay=0.0,
         mrd_header_file=mrd_file,
     )
 

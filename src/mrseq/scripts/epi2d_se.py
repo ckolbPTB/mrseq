@@ -231,8 +231,8 @@ def epi2d_se_kernel(
         if tr_delay < 0:
             raise ValueError(f'TR must be larger than {min_tr * 1000:.2f} ms. Current value is {tr * 1000:.3f} ms.')
 
-    print(f'\nCurrent echo time = {(t_exc_to_ref + t_ref_to_kcenter) * 1000:.4f} ms')
-    print(f'Current repetition time = {(min_tr + tr_delay) * 1000:.4f} ms')
+    print(f'\nCurrent echo time = {(t_exc_to_ref + t_ref_to_kcenter) * 1000:.3f} ms')
+    print(f'Current repetition time = {(min_tr + tr_delay) * 1000:.3f} ms')
 
     # create header
     prot = None

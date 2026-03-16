@@ -345,8 +345,10 @@ def t1_molli_bssfp_kernel(
                 else:
                     rf.signal = rf_signal
 
-                rf.phase_offset += rf_phase_increment
-                multi_echo_gradient._adc.phase_offset += rf_phase_increment
+                rf.phase_offset = np.mod(rf.phase_offset + rf_phase_increment, 2 * np.pi)
+                multi_echo_gradient._adc.phase_offset = np.mod(
+                    multi_echo_gradient._adc.phase_offset + rf_phase_increment, 2 * np.pi
+                )
 
                 seq.add_block(rf, gz, pp.make_label(type='SET', label='TRID', value=88 if idx < 0 else 1))
 
