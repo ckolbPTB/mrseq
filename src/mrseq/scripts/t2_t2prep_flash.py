@@ -1,34 +1,32 @@
-"""M2D radial FLASH sequence."""
+"""2D Cartesian FLASH with T2-preparation pulses for T2 mapping."""
 
 from pathlib import Path
 
-import ismrmrd
 import numpy as np
 import pypulseq as pp
 
+from mrseq.preparations.t2_prep import add_t2_prep
 from mrseq.utils import find_gx_flat_time_on_adc_raster
 from mrseq.utils import round_to_raster
 from mrseq.utils import sys_defaults
 from mrseq.utils import write_sequence
-from mrseq.utils.constants import GOLDEN_ANGLE_HALF_CIRCLE
-from mrseq.utils.ismrmrd import Fov
-from mrseq.utils.ismrmrd import Limits
-from mrseq.utils.ismrmrd import MatrixSize
-from mrseq.utils.ismrmrd import create_header
+from mrseq.utils.trajectory import cartesian_phase_encoding
 
 
-def radial_flash_kernel(
+def t2_t2prep_flash_kernel(
     system: pp.Opts,
     te: float | None,
     tr: float | None,
+    t2_prep_echo_times: np.ndarray,
+    n_recovery_cardiac_cycles: int,
+    min_cardiac_trigger_delay: float,
     fov_xy: float,
     n_readout: int,
-    n_spokes: int,
-    spoke_angle: float,
     readout_oversampling: float,
+    acceleration: int,
+    n_fully_sampled_center: int,
+    n_pe_points_per_cardiac_cycle: int | None,
     slice_thickness: float,
-    n_slices: int,
-    n_dummy_excitations: int,
     gx_pre_duration: float,
     gx_flat_time: float,
     rf_duration: float,
@@ -38,9 +36,8 @@ def radial_flash_kernel(
     rf_spoiling_phase_increment: float,
     gz_spoil_duration: float,
     gz_spoil_area: float,
-    mrd_header_file: str | Path | None,
 ) -> tuple[pp.Sequence, float, float]:
-    """Generate a radial FLASH sequence.
+    """Generate a FLASH sequence with T2-preparation pulses.
 
     Parameters
     ----------
@@ -49,59 +46,61 @@ def radial_flash_kernel(
     te
         Desired echo time (TE) (in seconds). Minimum echo time is used if set to None.
     tr
-        Desired repetition time (TR) (in seconds).
+        Desired repetition time (TR) (in seconds). Minimum repetition time is used if set to None.
+    t2_prep_echo_times
+        Echo times of T2-preparation pulse (in seconds).
+    n_recovery_cardiac_cycles
+        Number of cardiac cycles for magnetization recovery after each T2-prepared acquisition.
+    min_cardiac_trigger_delay
+        Minimum delay after cardiac trigger (in seconds).
+        The total trigger delay is implemented as a soft delay and can be chosen by the user in the UI.
     fov_xy
         Field of view in x and y direction (in meters).
     n_readout
         Number of frequency encoding steps.
-    n_spokes
-        Number of radial spokes.
-    spoke_angle
-        Angle between successive radial spokes (in radian).
     readout_oversampling
         Readout oversampling factor, commonly 2. This reduces aliasing artifacts.
+    acceleration
+        Uniform undersampling factor along the phase encoding direction.
+    n_fully_sampled_center
+        Number of phase encoding points in the fully sampled center.
+        Larger values will reduce the overall undersampling factor.
+    n_pe_points_per_cardiac_cycle
+        Number of phase encoding points per cardiac cycle.
+        If None, a single shot image is obtained after each T2-preparation pulse.
     slice_thickness
         Slice thickness of the 2D slice (in meters).
-    n_slices
-        Number of slices.
-    n_dummy_excitations
-        Number of dummy excitations before data acquisition to ensure steady state.
     gx_pre_duration
-        Duration of readout pre-winder gradient (in seconds)
+        Duration of readout pre-winder gradient (in seconds).
     gx_flat_time
-        Flat time of readout gradient (in seconds)
+        Flat time of readout gradient (in seconds).
     rf_duration
-        Duration of the rf excitation pulse (in seconds)
+        Duration of the rf excitation pulse (in seconds).
     rf_flip_angle
-        Flip angle of rf excitation pulse (in degrees)
+        Flip angle of rf excitation pulse (in degrees).
     rf_bwt
-        Bandwidth-time product of rf excitation pulse (Hz * seconds)
+        Bandwidth-time product of rf excitation pulse (Hz * seconds).
     rf_apodization
-        Apodization factor of rf excitation pulse
+        Apodization factor of rf excitation pulse.
     rf_spoiling_phase_increment
-        RF spoiling phase increment (in degrees). Set to 0 for no RF spoiling.
+        RF spoiling phase increment (in degrees). Set to 0 to disable RF spoiling.
     gz_spoil_duration
-        Duration of spoiler gradient (in seconds)
+        Duration of spoiler gradient (in seconds).
     gz_spoil_area
-        Area of spoiler gradient (in mT/m * s)
-    mrd_header_file
-        Filename of the ISMRMRD header file to be created. If None, no header file is created.
+        Area of spoiler gradient (in 1/meters = Hz/m * s).
 
     Returns
     -------
     seq
         PyPulseq Sequence object
     min_te
-        Shortest possible echo time.
+        Shortest possible echo time
     min_tr
-        Shortest possible repetition time.
+        Shortest possible repetition time
 
     """
     if readout_oversampling < 1:
         raise ValueError('Readout oversampling factor must be >= 1.')
-
-    if n_dummy_excitations < 0:
-        raise ValueError('Number of dummy excitations must be >= 0.')
 
     # create PyPulseq Sequence object and set system limits
     seq = pp.Sequence(system=system)
@@ -120,11 +119,9 @@ def radial_flash_kernel(
     )
 
     # create readout gradient and ADC
-    delta_k = 1 / (fov_xy * readout_oversampling)
+    delta_k = 1 / fov_xy
+    gx = pp.make_trapezoid(channel='x', flat_area=n_readout * delta_k, flat_time=gx_flat_time, system=system)
     n_readout_with_oversampling = int(n_readout * readout_oversampling)
-    gx = pp.make_trapezoid(
-        channel='x', flat_area=n_readout_with_oversampling * delta_k, flat_time=gx_flat_time, system=system
-    )
     n_readout_with_oversampling = n_readout_with_oversampling + np.mod(n_readout_with_oversampling, 2)  # make even
     adc = pp.make_adc(num_samples=n_readout_with_oversampling, duration=gx.flat_time, delay=gx.rise_time, system=system)
 
@@ -134,6 +131,18 @@ def radial_flash_kernel(
     k0_center_id = np.where((np.arange(n_readout_with_oversampling) - n_readout_with_oversampling / 2) * delta_k == 0)[
         0
     ][0]
+
+    # create phase encoding steps
+    pe_steps, pe_fully_sampled_center = cartesian_phase_encoding(
+        n_phase_encoding=n_readout,
+        acceleration=acceleration,
+        n_fully_sampled_center=n_fully_sampled_center,
+        sampling_order='low_high',
+        n_phase_encoding_per_shot=n_pe_points_per_cardiac_cycle,
+    )
+
+    if n_pe_points_per_cardiac_cycle is None:
+        n_pe_points_per_cardiac_cycle = len(pe_steps)
 
     # create spoiler gradients
     gz_spoil = pp.make_trapezoid(channel='z', system=system, area=gz_spoil_area, duration=gz_spoil_duration)
@@ -160,6 +169,7 @@ def radial_flash_kernel(
         te_delay = round_to_raster(te - min_te, system.block_duration_raster)
         if te_delay < 0:
             raise ValueError(f'TE must be larger than {min_te * 1000:.3f} ms. Current value is {te * 1000:.3f} ms.')
+    current_te = min_te + te_delay
 
     # calculate minimum repetition time
     min_tr = (
@@ -179,31 +189,23 @@ def radial_flash_kernel(
             raise ValueError(
                 f'TR must be larger than {current_min_tr * 1000:.3f} ms. Current value is {tr * 1000:.3f} ms.'
             )
+    current_tr = current_min_tr + tr_delay
 
-    print(f'\nCurrent echo time = {(min_te + te_delay) * 1000:.3f} ms')
-    print(f'Current repetition time = {(current_min_tr + tr_delay) * 1000:.3f} ms')
+    print(f'\nCurrent echo time = {current_te * 1000:.3f} ms')
+    print(f'Current repetition time = {current_tr * 1000:.3f} ms')
+    print(f'Acquisition window per cardiac cycle = {current_tr * n_pe_points_per_cardiac_cycle * 1000:.3f} ms')
 
     # choose initial rf phase offset
     rf_phase = 0.0
     rf_inc = 0.0
 
-    # create header
-    if mrd_header_file:
-        hdr = create_header(
-            traj_type='other',
-            encoding_fov=Fov(x=fov_xy * readout_oversampling, y=fov_xy, z=slice_thickness),
-            recon_fov=Fov(x=fov_xy, y=fov_xy, z=slice_thickness),
-            encoding_matrix=MatrixSize(n_x=n_readout_with_oversampling, n_y=n_readout_with_oversampling, n_z=1),
-            recon_matrix=MatrixSize(n_x=n_readout, n_y=n_readout, n_z=1),
-            dwell_time=adc.dwell,
-            slice_limits=Limits(min=0, max=n_slices, center=0),
-            k1_limits=Limits(min=0, max=n_spokes, center=0),
-            k2_limits=Limits(min=0, max=1, center=0),
-        )
-
-        # write header to file
-        prot = ismrmrd.Dataset(mrd_header_file, 'w')
-        prot.write_xml_header(hdr.toXML('utf-8'))
+    # create trigger soft delay (total duration: user_input/1.0 - min_cardiac_trigger_delay)
+    trig_soft_delay = pp.make_soft_delay(
+        hint='trig_delay',
+        offset=-min_cardiac_trigger_delay,
+        factor=1.0,
+        default_duration=0.8 - min_cardiac_trigger_delay,
+    )
 
     # obtain noise samples
     seq.add_block(pp.make_label(label='LIN', type='SET', value=0), pp.make_label(label='SLC', type='SET', value=0))
@@ -211,73 +213,91 @@ def radial_flash_kernel(
     seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))
     seq.add_block(pp.make_delay(system.rf_dead_time))
 
-    if mrd_header_file:
-        acq = ismrmrd.Acquisition()
-        acq.resize(trajectory_dimensions=2, number_of_samples=adc.num_samples)
-        prot.append_acquisition(acq)
-
-    for slice_ in range(n_slices):
-        for spoke_ in range(-n_dummy_excitations, n_spokes):
-            # calculate current phase_offset if rf_spoiling is activated
-            if rf_spoiling_phase_increment > 0:
-                rf.phase_offset = rf_phase / 180 * np.pi
-                adc.phase_offset = rf_phase / 180 * np.pi
-
-            # set frequency offset for current slice
-            rf.freq_offset = gz.amplitude * slice_thickness * (slice_ - (n_slices - 1) / 2)
-
-            # add slice selective excitation pulse
-            seq.add_block(rf, gz)
-
-            # update rf phase offset for the next excitation pulse
-            rf_inc = divmod(rf_inc + rf_spoiling_phase_increment, 360.0)[1]
-            rf_phase = divmod(rf_phase + rf_inc, 360.0)[1]
-
-            # calculate rotation angle for the current spoke
-            rotation_angle_rad = spoke_angle * spoke_
-
-            if te_delay > 0:
-                seq.add_block(gzr)
-                seq.add_block(pp.make_delay(te_delay))
-                seq.add_block(*pp.rotate(gx_pre, angle=rotation_angle_rad, axis='z'))
-            else:
-                seq.add_block(*pp.rotate(gx_pre, gzr, angle=rotation_angle_rad, axis='z'))
-
-            # rotate and add the readout gradient and ADC
-            if spoke_ >= 0:
-                labels = []
-                labels.append(pp.make_label(label='LIN', type='SET', value=spoke_))
-                labels.append(pp.make_label(label='SLC', type='SET', value=slice_))
-                seq.add_block(*pp.rotate(gx, adc, angle=rotation_angle_rad, axis='z'), *labels)
-            else:
-                seq.add_block(pp.make_delay(pp.calc_duration(gx, adc)))
-
-            seq.add_block(*pp.rotate(gx_post, gz_spoil, angle=rotation_angle_rad, axis='z'))
-
-            # add delay in case TR > min_TR
-            if tr_delay > 0:
-                seq.add_block(pp.make_delay(tr_delay))
-
-            if mrd_header_file and spoke_ >= 0:
-                # add acquisitions to metadata
-                k_radial_line = np.linspace(
-                    -n_readout_with_oversampling // 2,
-                    (n_readout_with_oversampling // 2) - 1,
-                    n_readout_with_oversampling,
+    n_cycles_per_image = len(pe_steps) // n_pe_points_per_cardiac_cycle
+    for t2_idx, t2_prep_echo_time in enumerate(t2_prep_echo_times):
+        for cardiac_cycle_idx in range(n_cycles_per_image):
+            if t2_prep_echo_time > 0:
+                # get prep block duration and calculate corresponding trigger delay
+                t2prep_block, prep_dur = add_t2_prep(echo_time=t2_prep_echo_time, system=system)
+                constant_trig_delay = round_to_raster(
+                    min_cardiac_trigger_delay - prep_dur - current_te / 2, raster_time=system.block_duration_raster
                 )
-                radial_trajectory = np.zeros((n_readout_with_oversampling, 2), dtype=np.float32)
+                if constant_trig_delay < 0:
+                    raise ValueError('Minimum trigger delay is too short for the selected T2prep timings.')
 
-                radial_trajectory[:, 0] = k_radial_line * np.cos(rotation_angle_rad)
-                radial_trajectory[:, 1] = k_radial_line * np.sin(rotation_angle_rad)
+                # add trigger and constant part of trigger delay
+                seq.add_block(pp.make_trigger(channel='physio1', duration=constant_trig_delay))
 
-                acq = ismrmrd.Acquisition()
-                acq.resize(trajectory_dimensions=2, number_of_samples=adc.num_samples)
-                acq.traj[:] = radial_trajectory
-                prot.append_acquisition(acq)
+                # add variable part of trigger delay (soft delay)
+                seq.add_block(trig_soft_delay)
 
-    # close ISMRMRD file
-    if mrd_header_file:
-        prot.close()
+                # add all events of T2prep block
+                for idx in t2prep_block.block_events:
+                    seq.add_block(t2prep_block.get_block(idx))
+
+            else:
+                constant_trig_delay = round_to_raster(
+                    min_cardiac_trigger_delay - current_te / 2, raster_time=system.block_duration_raster
+                )
+                if constant_trig_delay < 0:
+                    raise ValueError('Minimum trigger delay is too short for the current echo time.')
+
+                # add trigger and constant part of trigger delay
+                seq.add_block(pp.make_trigger(channel='physio1', duration=constant_trig_delay))
+
+                # add variable part of trigger delay (soft delay)
+                seq.add_block(trig_soft_delay)
+
+            for shot_idx in range(n_pe_points_per_cardiac_cycle):
+                pe_index_ = pe_steps[shot_idx + n_pe_points_per_cardiac_cycle * cardiac_cycle_idx]
+                # calculate current phase_offset if rf_spoiling is activated
+                if rf_spoiling_phase_increment > 0:
+                    rf.phase_offset = rf_phase / 180 * np.pi
+                    adc.phase_offset = rf_phase / 180 * np.pi
+
+                # add slice selective excitation pulse
+                seq.add_block(rf, gz)
+
+                # update rf phase offset for the next excitation pulse
+                rf_inc = divmod(rf_inc + rf_spoiling_phase_increment, 360.0)[1]
+                rf_phase = divmod(rf_phase + rf_inc, 360.0)[1]
+
+                # set labels for the next spoke
+                labels = []
+                labels.append(pp.make_label(label='LIN', type='SET', value=int(pe_index_ - np.min(pe_steps))))
+                labels.append(pp.make_label(label='IMA', type='SET', value=pe_index_ in pe_fully_sampled_center))
+                labels.append(pp.make_label(type='SET', label='ECO', value=int(t2_idx)))
+
+                # calculate current phase encoding gradient
+                gy_pre = pp.make_trapezoid(
+                    channel='y', area=delta_k * pe_index_, duration=gx_pre_duration, system=system
+                )
+
+                if te is not None:
+                    seq.add_block(gzr)
+                    seq.add_block(pp.make_delay(te_delay))
+                    seq.add_block(gx_pre, gy_pre, *labels)
+                else:
+                    seq.add_block(gx_pre, gy_pre, gzr, *labels)
+
+                # add the readout gradient and ADC
+                seq.add_block(gx, adc)
+
+                gy_pre.amplitude = -gy_pre.amplitude
+                seq.add_block(gx_post, gy_pre, gz_spoil)
+
+                # add delay in case TR > min_TR
+                if tr_delay > 0:
+                    seq.add_block(pp.make_delay(tr_delay))
+
+            if (t2_idx < len(t2_prep_echo_times) - 1) or (cardiac_cycle_idx < n_cycles_per_image - 1):
+                # add delay for magnetization recovery
+                for _ in range(n_recovery_cardiac_cycles):
+                    # add trigger and constant part of trigger delay
+                    seq.add_block(pp.make_trigger(channel='physio1', duration=min_cardiac_trigger_delay))
+
+                    # add variable part of trigger delay (soft delay)
+                    seq.add_block(trig_soft_delay)
 
     return seq, min_te, min_tr
 
@@ -286,20 +306,20 @@ def main(
     system: pp.Opts | None = None,
     te: float | None = None,
     tr: float | None = None,
-    rf_flip_angle: float = 12,
+    t2_prep_echo_times: np.ndarray | None = None,
     fov_xy: float = 128e-3,
     n_readout: int = 128,
-    n_spokes: int = 128,
+    acceleration: int = 2,
+    n_fully_sampled_center: int = 12,
+    n_pe_points_per_cardiac_cycle: int | None = None,
     slice_thickness: float = 8e-3,
-    n_slices: int = 1,
     receiver_bandwidth_per_pixel: float = 800,  # Hz/pixel
-    n_dummy_excitations: int = 20,
     show_plots: bool = True,
     test_report: bool = True,
     timing_check: bool = True,
     v141_compatibility: bool = True,
 ) -> tuple[pp.Sequence, Path]:
-    """Generate a radial FLASH sequence.
+    """Generate a FLASH sequence with T2-preparation pulses.
 
     Parameters
     ----------
@@ -309,22 +329,24 @@ def main(
         Desired echo time (TE) (in seconds). Minimum echo time is used if set to None.
     tr
         Desired repetition time (TR) (in seconds). Minimum repetition time is used if set to None.
-    rf_flip_angle
-        Flip angle of rf excitation pulse (in degrees)
+    t2_prep_echo_times
+        Echo times of T2-preparation pulse. If None, default values of [0, 50, 100] ms are used.
     fov_xy
         Field of view in x and y direction (in meters).
     n_readout
         Number of frequency encoding steps.
-    n_spokes
-        Number of radial lines.
+    acceleration
+        Uniform undersampling factor along the phase encoding direction.
+    n_fully_sampled_center
+        Number of phase encoding points in the fully sampled center.
+        Larger values will reduce the overall undersampling factor.
+    n_pe_points_per_cardiac_cycle
+        Number of phase encoding points per cardiac cycle.
+        If None, a single shot image is obtained after each T2-preparation pulse.
     slice_thickness
         Slice thickness of the 2D slice (in meters).
-    n_slices
-        Number of slices.
     receiver_bandwidth_per_pixel
         Desired receiver bandwidth per pixel (in Hz/pixel). This is used to calculate the readout duration.
-    n_dummy_excitations
-        Number of dummy excitations before data acquisition to ensure steady state.
     show_plots
         Toggles sequence plot.
     test_report
@@ -337,24 +359,31 @@ def main(
     Returns
     -------
     seq
-        Sequence object of radial FLASH sequence.
+        PyPulseq Sequence object.
     file_path
-        Path to the sequence file.
+        Path to the sequence file without suffix (append '.seq' for the actual file).
     """
     if system is None:
         system = sys_defaults
 
+    if t2_prep_echo_times is None:
+        t2_prep_echo_times = np.asarray([0.0, 0.05, 0.1])
+
+    n_recovery_cardiac_cycles = 3
+
     # define settings of rf excitation pulse
     rf_duration = 1.28e-3  # duration of the rf excitation pulse [s]
+    rf_flip_angle = 12  # flip angle of rf excitation pulse [°]
     rf_bwt = 4  # bandwidth-time product of rf excitation pulse [Hz*s]
     rf_apodization = 0.5  # apodization factor of rf excitation pulse
     readout_oversampling = 2  # readout oversampling factor, commonly 2. This reduces aliasing artifacts.
-    spoke_angle = GOLDEN_ANGLE_HALF_CIRCLE
 
     # define ADC and gradient timing
     n_readout_with_oversampling = int(n_readout * readout_oversampling)
-    adc_dwell_time = 1.0 / (receiver_bandwidth_per_pixel * n_readout_with_oversampling)
-    gx_pre_duration = 1.0e-3  # duration of readout pre-winder gradient [s]
+    adc_dwell_time = round_to_raster(
+        1.0 / (receiver_bandwidth_per_pixel * n_readout_with_oversampling), system.adc_raster_time
+    )
+    gx_pre_duration = 0.8e-3  # duration of readout pre-winder gradient [s]
     gx_flat_time, adc_dwell_time = find_gx_flat_time_on_adc_raster(
         n_readout_with_oversampling, adc_dwell_time, system.grad_raster_time, system.adc_raster_time
     )
@@ -365,27 +394,25 @@ def main(
     rf_spoiling_phase_increment = 117  # RF spoiling phase increment [°]. Set to 0 for no RF spoiling.
 
     # define sequence filename
-    filename = f'{Path(__file__).stem}_{int(fov_xy * 1000)}fov_{n_readout}nx_{n_spokes}na_{n_slices}ns'
+    filename = f'{Path(__file__).stem}_{int(fov_xy * 1000)}fov_{n_readout}nx_{acceleration}us_'
 
     output_path = Path.cwd() / 'output'
     output_path.mkdir(parents=True, exist_ok=True)
 
-    # delete existing header file
-    if (output_path / Path(filename + '_header.h5')).exists():
-        (output_path / Path(filename + '_header.h5')).unlink()
-
-    seq, min_te, min_tr = radial_flash_kernel(
+    seq, min_te, min_tr = t2_t2prep_flash_kernel(
         system=system,
         te=te,
         tr=tr,
+        t2_prep_echo_times=t2_prep_echo_times,
+        n_recovery_cardiac_cycles=n_recovery_cardiac_cycles,
+        min_cardiac_trigger_delay=np.max(t2_prep_echo_times) + 0.05,  # max T2prep echo time + buffer for spoiler
         fov_xy=fov_xy,
         n_readout=n_readout,
-        n_spokes=n_spokes,
-        spoke_angle=spoke_angle,
         readout_oversampling=readout_oversampling,
+        acceleration=acceleration,
+        n_fully_sampled_center=n_fully_sampled_center,
+        n_pe_points_per_cardiac_cycle=n_pe_points_per_cardiac_cycle,
         slice_thickness=slice_thickness,
-        n_slices=n_slices,
-        n_dummy_excitations=n_dummy_excitations,
         gx_pre_duration=gx_pre_duration,
         gx_flat_time=gx_flat_time,
         rf_duration=rf_duration,
@@ -395,7 +422,6 @@ def main(
         rf_spoiling_phase_increment=rf_spoiling_phase_increment,
         gz_spoil_duration=gz_spoil_duration,
         gz_spoil_area=gz_spoil_area,
-        mrd_header_file=output_path / Path(filename + '_header.h5'),
     )
 
     # check timing of the sequence
@@ -407,13 +433,13 @@ def main(
             print('\nTiming check failed! Error listing follows\n')
             print(error_report)
 
-    # show advanced rest report
+    # show advanced test report
     if test_report:
         print('\nCreating advanced test report...')
         print(seq.test_report())
 
     # write all required parameters in the seq-file header/definitions
-    seq.set_definition('FOV', [fov_xy, fov_xy, slice_thickness * n_slices])
+    seq.set_definition('FOV', [fov_xy, fov_xy, slice_thickness])
     seq.set_definition('ReconMatrix', (n_readout, n_readout, 1))
     seq.set_definition('SliceThickness', slice_thickness)
     seq.set_definition('TE', te or min_te)
@@ -425,7 +451,7 @@ def main(
     write_sequence(seq, str(output_path / filename), create_signature=True, v141_compatibility=v141_compatibility)
 
     if show_plots:
-        seq.plot(time_range=(0, 10 * (tr or min_tr)))
+        seq.plot()
 
     return seq, output_path / filename
 
