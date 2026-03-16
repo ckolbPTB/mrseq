@@ -40,6 +40,7 @@ def t1_molli_bssfp_kernel(
     rf_flip_angle: float,
     rf_bwt: float,
     rf_apodization: float,
+    rf_phase_increment: float,
     rf_inv_duration: float,
     rf_inv_spoil_risetime: float,
     rf_inv_spoil_flattime: float,
@@ -93,6 +94,8 @@ def t1_molli_bssfp_kernel(
         Bandwidth-time product of rf excitation pulse (Hz * seconds)
     rf_apodization
         Apodization factor of rf excitation pulse
+    rf_phase_increment
+        Phase increment between successive rf excitation pulses
     rf_inv_duration
         Duration of adiabatic inversion pulse (in seconds)
     rf_inv_spoil_risetime
@@ -341,12 +344,10 @@ def t1_molli_bssfp_kernel(
                     rf.signal = rf_signal * 1 / n_bssfp_startup_pulses * (n_bssfp_startup_pulses + idx + 1)
                 else:
                     rf.signal = rf_signal
-                if np.mod(idx, 2) == 0:
-                    rf.phase_offset = -np.pi
-                    multi_echo_gradient._adc.phase_offset = -np.pi
-                else:
-                    rf.phase_offset = 0.0
-                    multi_echo_gradient._adc.phase_offset = 0.0
+
+                rf.phase_offset += rf_phase_increment
+                multi_echo_gradient._adc.phase_offset += rf_phase_increment
+
                 seq.add_block(rf, gz, pp.make_label(type='SET', label='TRID', value=88 if idx < 0 else 1))
 
                 # set labels
@@ -560,6 +561,7 @@ def main(
         rf_flip_angle=rf_flip_angle,
         rf_bwt=rf_bwt,
         rf_apodization=rf_apodization,
+        rf_phase_increment=np.pi,
         rf_inv_duration=rf_inv_duration,
         rf_inv_spoil_risetime=rf_inv_spoil_risetime,
         rf_inv_spoil_flattime=rf_inv_spoil_flattime,
