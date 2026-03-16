@@ -6,6 +6,8 @@ import ismrmrd
 import numpy as np
 import pypulseq as pp
 
+from mrseq.utils import MultiEchoAcquisition
+from mrseq.utils import cartesian_phase_encoding
 from mrseq.utils import find_gx_flat_time_on_adc_raster
 from mrseq.utils import round_to_raster
 from mrseq.utils import sys_defaults
@@ -14,8 +16,6 @@ from mrseq.utils.ismrmrd import Fov
 from mrseq.utils.ismrmrd import Limits
 from mrseq.utils.ismrmrd import MatrixSize
 from mrseq.utils.ismrmrd import create_header
-from mrseq.utils.trajectory import MultiEchoAcquisition
-from mrseq.utils.trajectory import cartesian_phase_encoding
 
 
 def t2star_multi_echo_flash_kernel(

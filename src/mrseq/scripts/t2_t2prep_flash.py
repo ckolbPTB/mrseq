@@ -6,11 +6,11 @@ import numpy as np
 import pypulseq as pp
 
 from mrseq.preparations.t2_prep import add_t2_prep
+from mrseq.utils import cartesian_phase_encoding
 from mrseq.utils import find_gx_flat_time_on_adc_raster
 from mrseq.utils import round_to_raster
 from mrseq.utils import sys_defaults
 from mrseq.utils import write_sequence
-from mrseq.utils.trajectory import cartesian_phase_encoding
 
 
 def t2_t2prep_flash_kernel(

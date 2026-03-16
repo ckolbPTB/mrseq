@@ -6,11 +6,11 @@ import numpy as np
 import pypulseq as pp
 
 from mrseq.preparations import add_t1_inv_prep
+from mrseq.utils import cartesian_phase_encoding
 from mrseq.utils import find_gx_flat_time_on_adc_raster
 from mrseq.utils import round_to_raster
 from mrseq.utils import sys_defaults
 from mrseq.utils import write_sequence
-from mrseq.utils.trajectory import cartesian_phase_encoding
 
 
 def t1_molli_bssfp_kernel(
