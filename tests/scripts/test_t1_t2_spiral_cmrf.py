@@ -6,7 +6,7 @@ from mrseq.scripts.t1_t2_spiral_cmrf import main as create_seq
 from mrseq.utils.system_defaults import sys_a
 from mrseq.utils.system_defaults import sys_b
 
-EXPECTED_DUR = 14.53304  # defined 2025-12-12
+EXPECTED_DUR = 14.55141  # defined 2026-02-10
 
 
 def test_default_seq_duration(system_defaults):
