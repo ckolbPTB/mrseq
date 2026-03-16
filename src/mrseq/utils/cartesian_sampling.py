@@ -56,10 +56,10 @@ def cartesian_phase_encoding(
     if n_phase_encoding_per_shot and sampling_order != 'random':
         kpe_extended = np.arange(-n_phase_encoding, n_phase_encoding)
         kpe_extended = kpe_extended[np.argsort(np.abs(kpe_extended), kind='stable')]
-        idx = 0
+        kidx = 0
         while np.mod(len(kpe), n_phase_encoding_per_shot) > 0:
-            kpe = np.unique(np.concatenate((kpe, (kpe_extended[idx],))))
-            idx += 1
+            kpe = np.unique(np.concatenate((kpe, (kpe_extended[kidx],))))
+            kidx += 1
 
     # Different temporal orders of phase encoding points
     if sampling_order == 'random':
@@ -71,11 +71,11 @@ def cartesian_phase_encoding(
     elif sampling_order == 'linear':
         kpe = np.sort(kpe)
     elif sampling_order == 'low_high':
-        sort_idx = np.argsort(np.abs(kpe), kind='stable')
-        kpe = kpe[sort_idx]
+        idx = np.argsort(np.abs(kpe), kind='stable')
+        kpe = kpe[idx]
     elif sampling_order == 'high_low':
-        sort_idx = np.argsort(-np.abs(kpe), kind='stable')
-        kpe = kpe[sort_idx]
+        idx = np.argsort(-np.abs(kpe), kind='stable')
+        kpe = kpe[idx]
     else:
         raise ValueError(f'sampling order {sampling_order} not supported.')
 
