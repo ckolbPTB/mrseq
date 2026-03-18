@@ -181,9 +181,12 @@ class DiffusionPrep:
                         channel=channel,
                         system=self._system,
                         amplitude=g_amplitude * g_sign,
+                        max_slew=g_slew_rate,
                         duration=self._g_duration,
                     )
                 )
+                if self._g_diff[-1].flat_time < 0:
+                    raise ValueError('Slew rate and duration to small for this b-value.')
 
         # Refousing pulse
         self._rf_ref, self._gz_ref, _ = pp.make_sinc_pulse(
@@ -207,6 +210,7 @@ class DiffusionPrep:
             system=self._system,
             amplitude=g_amplitude,
             duration=g_crusher_duration,
+            max_slew=g_slew_rate,
         )
 
         # Calculate timings
