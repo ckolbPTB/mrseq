@@ -175,6 +175,7 @@ def adc_epi2d_se_kernel(
 
     t_ref_to_kcenter = diff_prep._block_duration - diff_prep._time_to_refocusing_pulse
     t_ref_to_kcenter += t_diff_gradient_adc
+    t_ref_to_kcenter += ge_segment_delay
     t_ref_to_kcenter += epi2d.time_to_center_without_prephaser
 
     # calculate minimum echo time
@@ -208,11 +209,12 @@ def adc_epi2d_se_kernel(
     min_tr += 2 * diff_prep._time_to_refocusing_pulse
     min_tr += te_delay2
     min_tr += epi2d.total_duration_without_prephaser
+    min_tr += ge_segment_delay
 
     if tr is None:
         tr_delay = 0.0
     else:
-        tr_delay = round_to_raster(tr - min_tr, system.block_duration_raster)
+        tr_delay = round_to_raster(tr - min_tr - ge_segment_delay, system.block_duration_raster)
         if tr_delay < 0:
             raise ValueError(f'TR must be larger than {min_tr * 1000:.2f} ms. Current value is {tr * 1000:.3f} ms.')
 
@@ -276,7 +278,12 @@ def adc_epi2d_se_kernel(
 
                 # add slice selective excitation pulse and set slice label
                 seq.add_block(
-                    rf, gz, slice_label, dw_label, rep_label, pp.make_label(type='SET', label='TRID', value=100 + rep)
+                    rf,
+                    gz,
+                    slice_label,
+                    dw_label,
+                    rep_label,
+                    pp.make_label(type='SET', label='TRID', value=100 + rep * len(b_values) + b_idx),
                 )
 
                 # add navigator scans for ghost correction

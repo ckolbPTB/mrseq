@@ -124,10 +124,6 @@ def t2_t2prep_flash_kernel(
         return_gz=True,
         use='excitation',
     )
-    # reduce slew rate of gz-rewinder which overlaps with readout pre-winder
-    gzr = pp.make_trapezoid(
-        channel='z', area=gzr.area, duration=gx_pre_duration, max_slew=system.max_slew * 0.4, system=system
-    )
 
     # create readout gradient and ADC
     delta_k = 1 / fov_xy
@@ -136,20 +132,18 @@ def t2_t2prep_flash_kernel(
     n_readout_with_oversampling = n_readout_with_oversampling + np.mod(n_readout_with_oversampling, 2)  # make even
     adc = pp.make_adc(num_samples=n_readout_with_oversampling, duration=gx.flat_time, delay=gx.rise_time, system=system)
 
-    # create readout pre- and re-winder gradient, reduce slew rate because all three gradients are used at the same time
+    # create readout pre- and re-winder gradient
     gx_pre = pp.make_trapezoid(
         channel='x',
         area=-gx.area / 2 - delta_k / 2,
         duration=gx_pre_duration,
         system=system,
-        max_slew=system.max_slew * 0.8,
     )
     gx_post = pp.make_trapezoid(
         channel='x',
         area=-gx.area / 2 + delta_k / 2,
         duration=gx_pre_duration,
         system=system,
-        max_slew=system.max_slew * 0.8,
     )
     k0_center_id = np.where((np.arange(n_readout_with_oversampling) - n_readout_with_oversampling / 2) * delta_k == 0)[
         0
@@ -167,13 +161,12 @@ def t2_t2prep_flash_kernel(
     if n_pe_points_per_cardiac_cycle is None:
         n_pe_points_per_cardiac_cycle = len(pe_steps)
 
-    # phase encoding gradient for max ky position, reduce slew rate because all three gradients are on at the same time
+    # phase encoding gradient for max ky position
     gy_pre_max = pp.make_trapezoid(
         channel='y',
         area=delta_k * n_readout / 2,
         duration=gx_pre_duration,
         system=system,
-        max_slew=system.max_slew * 0.8,
     )
     # create spoiler gradients
     gz_spoil = pp.make_trapezoid(channel='z', system=system, area=gz_spoil_area, duration=gz_spoil_duration)
@@ -294,7 +287,7 @@ def t2_t2prep_flash_kernel(
                     seq.add_block(trig_soft_delay)
 
             for shot_idx in range(n_pe_points_per_cardiac_cycle):
-                pe_index_ = pe_steps[shot_idx + n_pe_points_per_cardiac_cycle * cardiac_cycle_idx]
+                pe_index_ = pe_steps[shot_idx * len(pe_steps) // n_pe_points_per_cardiac_cycle + cardiac_cycle_idx]
                 # calculate current phase_offset if rf_spoiling is activated
                 if rf_spoiling_phase_increment > 0:
                     rf.phase_offset = rf_phase / 180 * np.pi

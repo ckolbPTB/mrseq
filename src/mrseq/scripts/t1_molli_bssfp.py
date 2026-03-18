@@ -138,10 +138,6 @@ def t1_molli_bssfp_kernel(
         max_slew=system.max_slew,
         use='excitation',
     )
-    # reduce slew rate of gz-rewinder which overlaps with readout pre-winder
-    gzr = pp.make_trapezoid(
-        channel='z', area=gzr.area, duration=gx_pre_duration, max_slew=system.max_slew * 0.2, system=system
-    )
 
     # create readout gradient and ADC
     multi_echo_gradient = MultiEchoAcquisition(
@@ -165,13 +161,12 @@ def t1_molli_bssfp_kernel(
         sampling_order='low_high',
     )
 
-    # phase encoding gradient for max ky position, reduce slew rate because all three gradients are on at the same time
+    # phase encoding gradient for max ky position
     gy_pre_max = pp.make_trapezoid(
         channel='y',
         area=1 / fov_xy * n_readout / 2,
         duration=gx_pre_duration,
         system=system,
-        max_slew=system.max_slew * 0.7,
     )
 
     # calculate minimum echo time

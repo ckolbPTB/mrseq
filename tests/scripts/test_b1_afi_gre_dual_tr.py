@@ -3,7 +3,7 @@
 import pytest
 from mrseq.scripts.b1_afi_gre_dual_tr import main as create_seq
 
-EXPECTED_DUR = 17.76  # defined 2026-03-04
+EXPECTED_DUR = 40.80178  # defined 2026-03-17
 
 
 def test_default_seq_duration(system_defaults):

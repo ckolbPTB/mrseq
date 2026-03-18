@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pypulseq as pp
 
+from mrseq.utils import find_gx_flat_time_on_adc_raster
 from mrseq.utils import round_to_raster
 from mrseq.utils import sys_defaults
 from mrseq.utils import write_sequence
@@ -97,22 +98,25 @@ def b1_afi_gre_dual_tr_kernel(
     gx = pp.make_trapezoid(channel='x', flat_area=n_readout * delta_k, flat_time=gx_flat_time, system=system)
     adc = pp.make_adc(num_samples=n_readout, duration=gx.flat_time, delay=gx.rise_time, system=system)
 
+    print(
+        f'Receiver bandwidth: {int(1.0 / (adc.num_samples * adc.dwell))} Hz/pixel '
+        f'(Readout duration: {adc.num_samples * adc.dwell * 1000:.3f} ms).'
+    )
+
     # create frequency encoding pre- and re-winder gradient
     gx_pre = pp.make_trapezoid(
         channel='x',
         area=-gx.area / 2 - delta_k / 2,
         duration=gx_pre_duration,
         system=system,
-        max_slew=system.max_slew * 0.7,
     )
 
-    # phase encoding gradient for max ky position, reduce slew rate because all three gradients are on at the same time
+    # phase encoding gradient for max ky position
     gy_pre_max = pp.make_trapezoid(
         channel='y',
         area=1 / fov_xy * n_readout / 2,
         duration=gx_pre_duration,
         system=system,
-        max_slew=system.max_slew * 0.7,
     )
 
     # calculate gradient areas for (linear) phase encoding direction
@@ -125,7 +129,7 @@ def b1_afi_gre_dual_tr_kernel(
             channel='x',
             area=120 / slice_thickness,
             system=system,
-            max_slew=system.max_slew,
+            max_slew=min(system.max_slew, 70 * system.gamma),
         )
     )
     gx_spoil.append(
@@ -133,7 +137,7 @@ def b1_afi_gre_dual_tr_kernel(
             channel='x',
             area=tr2 / tr1 * 120 / slice_thickness,
             system=system,
-            max_slew=system.max_slew,
+            max_slew=min(system.max_slew, 70 * system.gamma),
         )
     )
 
@@ -184,7 +188,11 @@ def b1_afi_gre_dual_tr_kernel(
             adc.phase_offset = rf_phase / 180 * np.pi
 
             # add slice selective excitation pulse
-            seq.add_block(rf, gz, pp.make_label(type='SET', label='TRID', value=88 if pe < 0 else 1))
+            seq.add_block(
+                rf,
+                gz,
+                pp.make_label(type='SET', label='TRID', value=100 + int(tr_idx + 1) if pe < 0 else int(tr_idx + 1)),
+            )
             seq.add_block(gzr)
 
             # update rf phase offset for the next excitation pulse
@@ -219,6 +227,21 @@ def b1_afi_gre_dual_tr_kernel(
 
             seq.add_block(pp.make_delay(tr_delay))
 
+    # obtain noise samples
+    seq.add_block(
+        pp.make_delay(0.1),
+        pp.make_label(label='LIN', type='SET', value=0),
+        pp.make_label(label='SLC', type='SET', value=0),
+        pp.make_label(type='SET', label='TRID', value=9999),
+    )
+    seq.add_block(
+        adc,
+        pp.make_delay(round_to_raster(pp.calc_duration(adc), system.block_duration_raster, 'ceil')),
+        pp.make_label(label='NOISE', type='SET', value=True),
+    )
+    seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))
+    seq.add_block(pp.make_delay(system.rf_dead_time))
+
     return seq, min_te
 
 
@@ -233,6 +256,7 @@ def main(
     n_phase_encoding: int = 128,
     n_dummy_excitations: int = 20,
     slice_thickness: float = 5e-3,
+    receiver_bandwidth_per_pixel: float = 600,  # Hz/pixel
     show_plots: bool = True,
     test_report: bool = True,
     timing_check: bool = True,
@@ -266,6 +290,8 @@ def main(
         Number of dummy excitations before data acquisition to ensure steady state.
     slice_thickness
         Slice thickness of the 2D slice (in meters).
+    receiver_bandwidth_per_pixel
+        Desired receiver bandwidth per pixel (in Hz/pixel). This is used to calculate the readout duration.
     show_plots
         Toggles sequence plot visualization.
     test_report
@@ -292,9 +318,11 @@ def main(
         print(f'\nWarning: TR2/TR1 ratio is {tr_ratio:.2f}. Recommended range is 3-10 for optimal B1 sensitivity.')
 
     # define ADC and gradient timing
-    adc_dwell = system.grad_raster_time
     gx_pre_duration = 1.0e-3  # duration of readout pre-winder gradient [s]
-    gx_flat_time = n_readout * adc_dwell  # flat time of readout gradient [s]
+    adc_dwell_time = round_to_raster(1.0 / (receiver_bandwidth_per_pixel * n_readout), system.adc_raster_time)
+    gx_flat_time, adc_dwell_time = find_gx_flat_time_on_adc_raster(
+        n_readout, adc_dwell_time, system.grad_raster_time, system.adc_raster_time
+    )
 
     # define settings of RF excitation pulse
     rf_duration = 1.28e-3  # duration of the RF excitation pulse [s]

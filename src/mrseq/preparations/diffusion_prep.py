@@ -173,7 +173,10 @@ class DiffusionPrep:
             if channel in g_channel:
                 self._g_diff.append(
                     pp.make_trapezoid(
-                        channel=channel, system=self._system, amplitude=g_amplitude * g_sign, duration=self._g_duration
+                        channel=channel,
+                        system=self._system,
+                        amplitude=g_amplitude * g_sign,
+                        duration=self._g_duration,
                     )
                 )
 
@@ -195,7 +198,10 @@ class DiffusionPrep:
 
         # Crusher gradient for b_value == 0
         self._g_crush = pp.make_trapezoid(
-            channel='z', system=self._system, amplitude=g_amplitude, duration=g_crusher_duration
+            channel='z',
+            system=self._system,
+            amplitude=g_amplitude,
+            duration=g_crusher_duration,
         )
 
         # Calculate timings

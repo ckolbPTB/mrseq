@@ -118,46 +118,45 @@ def cartesian_flash_kernel(
     n_readout_with_oversampling = n_readout_with_oversampling + np.mod(n_readout_with_oversampling, 2)  # make even
     adc = pp.make_adc(num_samples=n_readout_with_oversampling, duration=gx.flat_time, delay=gx.rise_time, system=system)
 
-    # create readout pre- and re-winder gradient, reduce slew rate because all three gradients are on at the same time
+    # create readout pre- and re-winder gradient
     gx_pre = pp.make_trapezoid(
         channel='x',
         area=-gx.area / 2 - delta_k / 2,
         duration=gx_pre_duration,
         system=system,
-        max_slew=system.max_slew * 0.7,
     )
     gx_post = pp.make_trapezoid(
         channel='x',
         area=-gx.area / 2 + delta_k / 2,
         duration=gx_pre_duration,
         system=system,
-        max_slew=system.max_slew * 0.7,
     )
     k0_center_id = np.where((np.arange(n_readout_with_oversampling) - n_readout_with_oversampling / 2) * delta_k == 0)[
         0
     ][0]
 
-    # phase encoding gradient, reduce slew rate because all three gradients are on at the same time
+    # phase encoding gradient
     gy_pre_max = pp.make_trapezoid(
         channel='y',
         area=delta_k * n_phase_encoding / 2,
         duration=gx_pre_duration,
         system=system,
-        max_slew=system.max_slew * 0.7,
     )
 
-    # slice encoding gradient, reduce slew rate because all three gradients are on at the same time
+    # slice encoding gradient
     gz_pre_max = pp.make_trapezoid(
         channel='z',
         area=1 / fov_z * n_slice_encoding / 2,
         duration=gx_pre_duration,
         system=system,
-        max_slew=system.max_slew * 0.7,
     )
 
-    # create spoiler gradients, reduce slew rate because all three gradients are on at the same time
+    # create spoiler gradients
     gz_spoil = pp.make_trapezoid(
-        channel='z', system=system, area=gz_spoil_area, duration=gz_spoil_duration, max_slew=system.max_slew * 0.7
+        channel='z',
+        system=system,
+        area=gz_spoil_area,
+        duration=gz_spoil_duration,
     )
 
     # calculate minimum echo time
