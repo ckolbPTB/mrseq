@@ -121,6 +121,7 @@ class DiffusionPrep:
         rf_ref_bwt: float = 4,
         rf_ref_width_scale_factor: float = 3.5,
         g_amplitude: float | None = None,
+        g_slew_rate: float | None = None,
         max_b_value: float = 500,
         g_delta_time: float = 50e-3,
         g_channel: Literal['x', 'y', 'z', 'xy', 'yz', 'xz', 'xyz'] = 'x',
@@ -143,7 +144,9 @@ class DiffusionPrep:
         rf_ref_width_scale_factor
             Factor to scale the slice thickness of the refocusing pulse.
         g_amplitude
-            Amplitude of diffusion gradient. If set to None, 90% of the maximum amplitude is used.
+            Amplitude of diffusion gradient. If set to None, maximum amplitude is used.
+        g_slew_rate
+            Slew rate of diffusion gradient. If set to None, maximum slew rate is used.
         max_b_value
             Highest b-value in s/mm^2
         g_delta_time
@@ -160,7 +163,9 @@ class DiffusionPrep:
 
         # Diffusion gradient
         if g_amplitude is None:
-            g_amplitude = self._system.max_grad * 0.9
+            g_amplitude = self._system.max_grad
+        if g_slew_rate is None:
+            g_slew_rate = self._system.max_slew
 
         # Calculate duration based on highest b-value
         self._g_duration = round_to_raster(

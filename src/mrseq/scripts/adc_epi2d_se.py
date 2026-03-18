@@ -41,6 +41,7 @@ def adc_epi2d_se_kernel(
     gz_crusher_duration: float,
     b_values: Sequence[float],
     g_diff_max_amplitude: float,
+    g_diff_max_slew_rate: float,
     g_diff_delta_time: float,
     ge_segment_delay: float,
     mrd_header_file: str | Path | None,
@@ -90,6 +91,8 @@ def adc_epi2d_se_kernel(
         b-values for diffusion weighting gradients in s/mm^2
     g_diff_max_amplitude
         Max amplitude of diffusion gradient.
+    g_diff_max_slew_rate
+        Max slew rate of diffusion gradient.
     g_diff_delta_time
         Time between beginning of first and second diffusion gradient.
     ge_segment_delay
@@ -128,6 +131,7 @@ def adc_epi2d_se_kernel(
         rf_ref_width_scale_factor=2,
         g_crusher_duration=gz_crusher_duration,
         g_amplitude=g_diff_max_amplitude,
+        g_slew_rate=g_diff_max_slew_rate,
         g_delta_time=g_diff_delta_time,
         max_b_value=max(b_values),
         g_channel='xy',
@@ -495,7 +499,6 @@ def main(
 
     # diffusion gradients
     g_diff_delta_time = 34e-3
-    g_diff_max_amplitude = system.max_grad * 0.8
 
     # define sequence filename
     rs_string = 'rs' if ramp_sampling else 'nors'  # ramp sampling
@@ -534,7 +537,8 @@ def main(
         partial_fourier_factor=partial_fourier_factor,
         gz_crusher_duration=gz_crusher_duration,
         b_values=b_values,
-        g_diff_max_amplitude=g_diff_max_amplitude,
+        g_diff_max_amplitude=system.max_grad * 0.8,
+        g_diff_max_slew_rate=system.max_slew * 0.8,
         g_diff_delta_time=g_diff_delta_time,
         ge_segment_delay=0.0,
         mrd_header_file=mrd_file,
