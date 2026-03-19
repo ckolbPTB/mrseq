@@ -436,6 +436,9 @@ def ismrmrd_from_sequence(adc_data_list: Sequence[np.ndarray], filename_seq: str
         if adc_labels.get('IMA')[idx] if 'IMA' in adc_labels else 0:
             acq.setFlag(ismrmrd.ACQ_IS_PARALLEL_CALIBRATION_AND_IMAGING)
 
+        if adc_labels.get('PMC')[idx] if 'PMC' in adc_labels else 0:
+            acq.setFlag(ismrmrd.ACQ_IS_RTFEEDBACK_DATA.value)
+
         ds.append_acquisition(acq)
 
     ds.close()
