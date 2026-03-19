@@ -111,8 +111,8 @@ def adc_epi2d_se_kernel(
 
     """
     # Direction and sign of diffusion gradients
-    diff_directions = ['xy', 'yz', 'xz', 'xy', 'yz', 'xz']
-    diff_sign = [1, 1, 1, -1, -1, -1]
+    diff_directions: list[Literal['x', 'y', 'z', 'xy', 'yz', 'xz', 'xyz']] = ['xy', 'yz', 'xz', 'xy', 'yz', 'xz']
+    diff_sign: list[Literal[-1, 1]] = [1, 1, 1, -1, -1, -1]
 
     # Time delay between second diffusion gradient and adc to minimize impact of eddy currents
     t_diff_gradient_adc = 1e-3
