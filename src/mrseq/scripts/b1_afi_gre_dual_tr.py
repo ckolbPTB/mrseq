@@ -133,7 +133,7 @@ def b1_afi_gre_dual_tr_kernel(
     # phase encoding gradient for max ky position
     gy_pre_max = pp.make_trapezoid(
         channel='y',
-        area=1 / fov_xy * n_readout / 2,
+        area=1 / fov_xy * n_phase_encoding / 2,
         duration=gx_pre_duration,
         system=system,
     )
@@ -141,7 +141,7 @@ def b1_afi_gre_dual_tr_kernel(
     # slice encoding gradient
     gz_pre_max = pp.make_trapezoid(
         channel='z',
-        area=1 / fov_z * (n_slice_encoding // 2),
+        area=1 / fov_z * n_slice_encoding / 2,
         duration=gx_pre_duration,
         system=system,
     )
