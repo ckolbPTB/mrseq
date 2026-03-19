@@ -20,13 +20,16 @@ def b1_afi_gre_dual_tr_kernel(
     n_readout: int,
     n_phase_encoding: int,
     n_dummy_excitations: int,
-    slice_thickness: float,
+    fov_z: float,
+    n_slice_encoding: int,
     gx_pre_duration: float,
     gx_flat_time: float,
     rf_duration: float,
     rf_flip_angle: float,
     rf_bwt: float,
     rf_apodization: float,
+    gx_spoil_area: float,
+    gx_spoil_slew_rate: float,
     ge_segment_delay: float,
 ) -> tuple[pp.Sequence, float]:
     """Generate an AFI (Actual Flip Angle) sequence for B1 mapping.
@@ -52,8 +55,11 @@ def b1_afi_gre_dual_tr_kernel(
         Number of phase encoding steps.
     n_dummy_excitations
         Number of dummy excitations before data acquisition to ensure steady state.
-    slice_thickness
-        Slice thickness of the 2D slice (in meters).
+    fov_z
+        Field of view in z direction (in meters).
+    n_slice_encoding
+        Number of slice encoding steps.
+        For n_slice_encoding  = 1 a slice selective pulse is used, otherwise a block pulse is used for excitation.
     gx_pre_duration
         Duration of readout pre-winder gradient (in seconds).
     gx_flat_time
@@ -66,6 +72,10 @@ def b1_afi_gre_dual_tr_kernel(
         Bandwidth-time product of RF excitation pulse (Hz * seconds).
     rf_apodization
         Apodization factor of RF excitation pulse.
+    gx_spoil_area
+        Area of spoiler gradient (in mT/m * s)
+    gx_spoil_slew_rate
+        Max slew rate of spoiler gradient
     ge_segment_delay
         Additional delay time after each readout for GE scanners (in seconds).
 
@@ -81,17 +91,26 @@ def b1_afi_gre_dual_tr_kernel(
     seq = pp.Sequence(system=system)
 
     # create slice selective excitation pulse and gradients
-    rf, gz, gzr = pp.make_sinc_pulse(
-        flip_angle=rf_flip_angle / 180 * np.pi,
-        duration=rf_duration,
-        slice_thickness=slice_thickness,
-        apodization=rf_apodization,
-        time_bw_product=rf_bwt,
-        delay=system.rf_dead_time,
-        system=system,
-        return_gz=True,
-        use='excitation',
-    )
+    if n_slice_encoding == 1:
+        rf, gz, gzr = pp.make_sinc_pulse(
+            flip_angle=rf_flip_angle / 180 * np.pi,
+            duration=rf_duration,
+            slice_thickness=fov_z,
+            apodization=rf_apodization,
+            time_bw_product=rf_bwt,
+            delay=system.rf_dead_time,
+            system=system,
+            return_gz=True,
+            use='excitation',
+        )
+    else:
+        rf = pp.make_block_pulse(
+            flip_angle=rf_flip_angle * np.pi / 180,
+            delay=system.rf_dead_time,
+            duration=rf_duration,
+            system=system,
+            use='excitation',
+        )
 
     # create readout gradient and ADC
     delta_k = 1 / fov_xy
@@ -119,6 +138,14 @@ def b1_afi_gre_dual_tr_kernel(
         system=system,
     )
 
+    # slice encoding gradient
+    gz_pre_max = pp.make_trapezoid(
+        channel='z',
+        area=1 / fov_z * (n_slice_encoding // 2),
+        duration=gx_pre_duration,
+        system=system,
+    )
+
     # calculate gradient areas for (linear) phase encoding direction
     k0_center_id = np.where((np.arange(n_readout) - n_readout / 2) * delta_k == 0)[0][0]
 
@@ -127,25 +154,25 @@ def b1_afi_gre_dual_tr_kernel(
     gx_spoil.append(
         pp.make_trapezoid(
             channel='x',
-            area=120 / slice_thickness,
+            area=gx_spoil_area,
             system=system,
-            max_slew=min(system.max_slew, 70 * system.gamma),
+            max_slew=gx_spoil_slew_rate,
         )
     )
     gx_spoil.append(
         pp.make_trapezoid(
             channel='x',
-            area=tr2 / tr1 * 120 / slice_thickness,
+            area=tr2 / tr1 * gx_spoil_area,
             system=system,
-            max_slew=min(system.max_slew, 70 * system.gamma),
+            max_slew=gx_spoil_slew_rate,
         )
     )
 
     # calculate minimum echo time
+    gz_time = max(rf.ringdown_time, gz.fall_time) + pp.calc_duration(gzr) if n_slice_encoding == 1 else rf.ringdown_time
     min_te = (
         rf.shape_dur / 2  # time from center to end of RF pulse
-        + max(rf.ringdown_time, gz.fall_time)  # RF ringdown or gradient fall time
-        + pp.calc_duration(gzr)  # slice selection rewinder gradient
+        + gz_time
         + pp.calc_duration(gx_pre)  # readout pre-winder gradient
         + gx.delay  # potential delay of readout gradient
         + gx.rise_time  # rise time of readout gradient
@@ -167,65 +194,72 @@ def b1_afi_gre_dual_tr_kernel(
     rf_phase = 0.0
     rf_inc = 0.0
 
-    for pe in range(-n_dummy_excitations, n_phase_encoding):
-        # phase encoding along se and pe
-        if pe >= 0:
-            gy_pre = pp.scale_grad(gy_pre_max, (pe - n_phase_encoding / 2) / (n_phase_encoding / 2))
-            pe_label = pp.make_label(type='SET', label='LIN', value=int(pe))
-        else:
-            gy_pre = pp.scale_grad(gy_pre_max, 0)
-            pe_label = pp.make_label(type='SET', label='LIN', value=0)
-
-        # loop over TR variants (TR1 and TR2)
-        for tr_idx, tr_current in enumerate([tr1, tr2]):
-            # set contrast ('ECO') label for current TR
-            contrast_label = pp.make_label(type='SET', label='ECO', value=int(tr_idx))
-
-            # save start time of current TR block
-            _start_time_tr_block = sum(seq.block_durations.values())
-
-            rf.phase_offset = rf_phase / 180 * np.pi
-            adc.phase_offset = rf_phase / 180 * np.pi
-
-            # add slice selective excitation pulse
-            seq.add_block(
-                rf,
-                gz,
-                pp.make_label(type='SET', label='TRID', value=100 + int(tr_idx + 1) if pe < 0 else int(tr_idx + 1)),
-            )
-            seq.add_block(gzr)
-
-            # update rf phase offset for the next excitation pulse
-            rf_inc = divmod(rf_inc + rf_spoiling_phase_increment, 360.0)[1]
-            rf_phase = divmod(rf_phase + rf_inc, 360.0)[1]
-
-            # add echo time delay
-            seq.add_block(pp.make_delay(te_delay))
-
-            # add pre-winder gradients and labels
-            seq.add_block(gx_pre, gy_pre, pe_label, contrast_label)
-
-            # add readout gradient and ADC
+    for se in range(n_slice_encoding):
+        for pe in range(-n_dummy_excitations if se == 0 else 0, n_phase_encoding):
+            # phase encoding along se and pe
             if pe >= 0:
-                seq.add_block(gx, adc, pe_label)
+                gz_pre = pp.scale_grad(gz_pre_max, (se - n_slice_encoding // 2) / (n_slice_encoding / 2))
+                se_label = pp.make_label(type='SET', label='PAR', value=int(se))
+                gy_pre = pp.scale_grad(gy_pre_max, (pe - n_phase_encoding // 2) / (n_phase_encoding / 2))
+                pe_label = pp.make_label(type='SET', label='LIN', value=int(pe))
             else:
-                seq.add_block(gx, pp.make_delay(pp.calc_duration(adc)))
+                gz_pre = pp.scale_grad(gz_pre_max, 0)
+                se_label = pp.make_label(type='SET', label='PAR', value=0)
+                gy_pre = pp.scale_grad(gy_pre_max, 0)
+                pe_label = pp.make_label(type='SET', label='LIN', value=0)
 
-            # y re-winder and spoiler gradients
-            seq.add_block(pp.scale_grad(gy_pre, -1))
-            seq.add_block(gx_spoil[tr_idx])
+            # loop over TR variants (TR1 and TR2)
+            for tr_idx, tr_current in enumerate([tr1, tr2]):
+                # set contrast ('ECO') label for current TR
+                contrast_label = pp.make_label(type='SET', label='ECO', value=int(tr_idx))
 
-            # calculate TR delay
-            duration_tr_block = sum(seq.block_durations.values()) - _start_time_tr_block
-            tr_delay = round_to_raster(tr_current - duration_tr_block - ge_segment_delay, system.block_duration_raster)
+                # save start time of current TR block
+                _start_time_tr_block = sum(seq.block_durations.values())
 
-            if tr_delay < 0:
-                raise ValueError(
-                    f'TR must be larger than {duration_tr_block * 1000:.3f} ms. '
-                    f'Current value is {tr_current * 1000:.3f} ms.'
+                rf.phase_offset = rf_phase / 180 * np.pi
+                adc.phase_offset = rf_phase / 180 * np.pi
+
+                # add slice selective excitation pulse
+                trid_label = 100 + int(tr_idx + 1) if pe < 0 else int(tr_idx + 1)
+                if n_slice_encoding == 1:
+                    seq.add_block(rf, gz, pp.make_label(type='SET', label='TRID', value=trid_label))
+                    seq.add_block(gzr)
+                else:
+                    seq.add_block(rf, pp.make_label(type='SET', label='TRID', value=trid_label))
+
+                # update rf phase offset for the next excitation pulse
+                rf_inc = divmod(rf_inc + rf_spoiling_phase_increment, 360.0)[1]
+                rf_phase = divmod(rf_phase + rf_inc, 360.0)[1]
+
+                # add echo time delay
+                seq.add_block(pp.make_delay(te_delay))
+
+                # add pre-winder gradients and labels
+                seq.add_block(gx_pre, gy_pre, gz_pre, pe_label, contrast_label, se_label)
+
+                # add readout gradient and ADC
+                if pe >= 0:
+                    seq.add_block(gx, adc, pe_label)
+                else:
+                    seq.add_block(gx, pp.make_delay(pp.calc_duration(adc)))
+
+                # y re-winder and spoiler gradients
+                seq.add_block(pp.scale_grad(gy_pre, -1), pp.scale_grad(gz_pre, -1))
+                seq.add_block(gx_spoil[tr_idx])
+
+                # calculate TR delay
+                duration_tr_block = sum(seq.block_durations.values()) - _start_time_tr_block
+                tr_delay = round_to_raster(
+                    tr_current - duration_tr_block - ge_segment_delay, system.block_duration_raster
                 )
 
-            seq.add_block(pp.make_delay(tr_delay))
+                if tr_delay < 0:
+                    raise ValueError(
+                        f'TR must be larger than {duration_tr_block * 1000:.3f} ms. '
+                        f'Current value is {tr_current * 1000:.3f} ms.'
+                    )
+
+                seq.add_block(pp.make_delay(tr_delay))
 
     # obtain noise samples
     seq.add_block(
@@ -255,7 +289,8 @@ def main(
     n_readout: int = 128,
     n_phase_encoding: int = 128,
     n_dummy_excitations: int = 20,
-    slice_thickness: float = 5e-3,
+    fov_z: float = 8e-3,
+    n_slice_encoding: int = 1,
     receiver_bandwidth_per_pixel: float = 600,  # Hz/pixel
     show_plots: bool = True,
     test_report: bool = True,
@@ -288,8 +323,11 @@ def main(
         Number of phase encoding steps.
     n_dummy_excitations
         Number of dummy excitations before data acquisition to ensure steady state.
-    slice_thickness
-        Slice thickness of the 2D slice (in meters).
+    fov_z
+        Field of view in z direction (in meters).
+    n_slice_encoding
+        Number of slice encoding steps.
+        For n_slice_encoding  = 1 a slice selective pulse is used, otherwise a block pulse is used for excitation.
     receiver_bandwidth_per_pixel
         Desired receiver bandwidth per pixel (in Hz/pixel). This is used to calculate the readout duration.
     show_plots
@@ -329,6 +367,10 @@ def main(
     rf_bwt = 4  # bandwidth-time product of RF excitation pulse [Hz*s]
     rf_apodization = 0.5  # apodization factor of RF excitation pulse
 
+    # gradient moment for spoiling of first TR: 300 mT*ms/m
+    gx_spoil_area = 300 * 1e-6 * system.gamma
+    gx_spoil_slew_rate = min(system.max_slew, 70 * system.gamma)
+
     seq, min_te = b1_afi_gre_dual_tr_kernel(
         system=system,
         te=te,
@@ -338,13 +380,16 @@ def main(
         n_readout=n_readout,
         n_phase_encoding=n_phase_encoding,
         n_dummy_excitations=n_dummy_excitations,
-        slice_thickness=slice_thickness,
+        fov_z=fov_z,
+        n_slice_encoding=n_slice_encoding,
         gx_pre_duration=gx_pre_duration,
         gx_flat_time=gx_flat_time,
         rf_duration=rf_duration,
         rf_flip_angle=rf_flip_angle,
         rf_bwt=rf_bwt,
         rf_apodization=rf_apodization,
+        gx_spoil_area=gx_spoil_area,
+        gx_spoil_slew_rate=gx_spoil_slew_rate,
         ge_segment_delay=0.0,
     )
 
@@ -371,9 +416,8 @@ def main(
     )
 
     # write all required parameters in the seq-file header/definitions
-    seq.set_definition('FOV', [fov_xy, fov_xy, slice_thickness])
-    seq.set_definition('ReconMatrix', (n_readout, n_phase_encoding, 1))
-    seq.set_definition('SliceThickness', slice_thickness)
+    seq.set_definition('FOV', [fov_xy, fov_xy, fov_z])
+    seq.set_definition('ReconMatrix', (n_readout, n_phase_encoding, n_slice_encoding))
     seq.set_definition('TE', te or min_te)
     seq.set_definition('TR1', tr1)
     seq.set_definition('TR2', tr2)
