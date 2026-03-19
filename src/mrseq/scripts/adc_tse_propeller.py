@@ -248,7 +248,7 @@ def adc_tse_propeller_kernel(
             se_label = pp.make_label(type='SET', label='PAR', value=int(se))
 
             # phase encoding along se
-            gz_pre = pp.scale_grad(gz_pre_max, (se - n_slice_encoding / 2) / (n_slice_encoding / 2))
+            gz_pre = pp.scale_grad(gz_pre_max, (se - n_slice_encoding // 2) / (n_slice_encoding / 2))
 
             for blade in range(n_blades):
                 _start_time_tr_block = sum(seq.block_durations.values())

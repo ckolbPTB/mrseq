@@ -213,9 +213,9 @@ def cartesian_flash_kernel(
             for pe in range(-n_dummy, n_phase_encoding):
                 # phase encoding along se and pe
                 if pe >= 0:
-                    gz_pre = pp.scale_grad(gz_pre_max, (se - n_slice_encoding / 2) / (n_slice_encoding / 2))
+                    gz_pre = pp.scale_grad(gz_pre_max, (se - n_slice_encoding // 2) / (n_slice_encoding / 2))
                     se_label = pp.make_label(type='SET', label='PAR', value=int(se))
-                    gy_pre = pp.scale_grad(gy_pre_max, (pe - n_phase_encoding / 2) / (n_phase_encoding / 2))
+                    gy_pre = pp.scale_grad(gy_pre_max, (pe - n_phase_encoding // 2) / (n_phase_encoding / 2))
                     pe_label = pp.make_label(type='SET', label='LIN', value=int(pe))
                 else:
                     gz_pre = pp.scale_grad(gz_pre_max, 0)
