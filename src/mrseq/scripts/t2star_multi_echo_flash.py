@@ -52,7 +52,7 @@ def t2star_multi_echo_flash_kernel(
     system
         PyPulseq system limits object.
     te
-        Desired echo time (TE) (in seconds). Minimum echo time is used if set to None.
+        Desired echo time (TE) of first echo (in seconds). Minimum echo time is used if set to None.
     delta_te
             Desired echo spacing (in seconds). Minimum echo spacing is used if set to None.
     tr
@@ -351,7 +351,7 @@ def main(
     system
         PyPulseq system limits object.
     te
-        Desired echo time (TE) (in seconds). Minimum echo time is used if set to None.
+        Desired echo time (TE) of first echo (in seconds). Minimum echo time is used if set to None.
     delta_te
             Desired echo spacing (in seconds). Minimum echo spacing is used if set to None.
     tr

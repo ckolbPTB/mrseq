@@ -191,7 +191,6 @@ def t2_tse_cartesian_kernel(
             seq=seq,
             te=te,
             fov_z=fov_z,
-            adc_dwell_time=adc.dwell,
         )
         seq.add_block(pp.make_delay(4.0))
 

@@ -211,7 +211,8 @@ class MultiEchoAcquisition:
             self._delta_te_delay = round_to_raster(delta_te - min_delta_te, self._system.block_duration_raster)
             if self._delta_te_delay < 0:
                 raise ValueError(
-                    f'TE must be larger than {min_delta_te * 1000:.3f} ms. Current value is {delta_te * 1000:.3f} ms.'
+                    f'Delta TE must be larger than {min_delta_te * 1000:.3f} ms. '
+                    f'Current value is {delta_te * 1000:.3f} ms.'
                 )
 
     def add_to_seq(self, seq: pp.Sequence, n_echoes: int, polarity: Literal['positive', 'negative'] = 'positive'):
