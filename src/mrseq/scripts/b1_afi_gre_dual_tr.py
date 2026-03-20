@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pypulseq as pp
 
+from mrseq.preparations.receiver_gain_calibration import add_gre_receiver_gain_calibration
 from mrseq.utils import find_gx_flat_time_on_adc_raster
 from mrseq.utils import round_to_raster
 from mrseq.utils import sys_defaults
@@ -188,6 +189,16 @@ def b1_afi_gre_dual_tr_kernel(
             raise ValueError(f'TE must be larger than {min_te * 1000:.3f} ms. Current value is {te * 1000:.3f} ms.')
 
     print(f'\nMinimum TE: {min_te * 1000:.3f} ms')
+
+    if ge_segment_delay > 0:
+        seq, _ = add_gre_receiver_gain_calibration(
+            system=system,
+            seq=seq,
+            rf_flip_angle=rf_flip_angle,
+            te=te_delay + min_te,
+            fov_z=fov_z,
+        )
+        seq.add_block(pp.make_delay(1.0))
 
     # rf spoiling
     rf_spoiling_phase_increment = 117

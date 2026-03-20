@@ -10,6 +10,7 @@ import numpy as np
 import pypulseq as pp
 
 from mrseq.preparations.diffusion_prep import DiffusionPrep
+from mrseq.preparations.receiver_gain_calibration import add_se_receiver_gain_calibration
 from mrseq.utils import round_to_raster
 from mrseq.utils import sys_defaults
 from mrseq.utils import write_sequence
@@ -226,7 +227,6 @@ def adc_epi2d_se_kernel(
     print(f'Current repetition time = {(min_tr + tr_delay + ge_segment_delay) * 1000:.3f} ms')
 
     # create header
-    prot = None
     if mrd_header_file:
         hdr = create_header(
             traj_type='other',
@@ -252,6 +252,22 @@ def adc_epi2d_se_kernel(
         nav_kx_forward = _trapezoid_area_at_times(
             epi2d.gx.rise_time, epi2d.gx.flat_time, epi2d.gx.fall_time, abs(epi2d.gx.amplitude), nav_sample_times
         )
+
+    if ge_segment_delay > 0:
+        n_readout_rx_gain = 128
+        seq, _ = add_se_receiver_gain_calibration(
+            system=system,
+            seq=seq,
+            te=t_exc_to_ref + t_ref_to_kcenter,
+            fov_z=slice_thickness,
+            n_readout=n_readout_rx_gain,
+        )
+        seq.add_block(pp.make_delay(4.0))
+
+        if mrd_header_file:
+            acq = ismrmrd.Acquisition()
+            acq.resize(trajectory_dimensions=2, number_of_samples=n_readout_rx_gain)
+            prot.append_acquisition(acq)
 
     b_values_calculated = []
     for rep in range(n_repetitions):

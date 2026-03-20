@@ -7,6 +7,7 @@ import numpy as np
 import pypulseq as pp
 
 from mrseq.preparations import add_t1_inv_prep
+from mrseq.preparations.receiver_gain_calibration import add_gre_receiver_gain_calibration
 from mrseq.utils import find_gx_flat_time_on_adc_raster
 from mrseq.utils import round_to_raster
 from mrseq.utils import sys_defaults
@@ -217,6 +218,23 @@ def t1_radial_look_locker_kernel(
         # write header to file
         prot = ismrmrd.Dataset(mrd_header_file, 'w')
         prot.write_xml_header(hdr.toXML('utf-8'))
+
+    if ge_segment_delay > 0:
+        n_readout_rx_gain = 128
+        seq, _ = add_gre_receiver_gain_calibration(
+            system=system,
+            seq=seq,
+            rf_flip_angle=rf_flip_angle,
+            te=te_delay + min_te,
+            fov_z=slice_thickness,
+            n_readout=n_readout_rx_gain,
+        )
+        seq.add_block(pp.make_delay(1.0))
+
+        if mrd_header_file:
+            acq = ismrmrd.Acquisition()
+            acq.resize(trajectory_dimensions=2, number_of_samples=n_readout_rx_gain)
+            prot.append_acquisition(acq)
 
     for rep_ in range(n_repetitions):
         # Create inversion pulse

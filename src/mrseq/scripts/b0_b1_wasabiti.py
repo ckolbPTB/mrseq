@@ -6,6 +6,7 @@ import numpy as np
 import pypulseq as pp
 
 from mrseq.preparations.adiabatic_sat_prep import add_adia_sat_block
+from mrseq.preparations.receiver_gain_calibration import add_gre_receiver_gain_calibration
 from mrseq.utils import find_gx_flat_time_on_adc_raster
 from mrseq.utils import round_to_raster
 from mrseq.utils import sys_defaults
@@ -189,6 +190,16 @@ def wasabiti_gre_centric_kernel(
         + pp.calc_duration(gz_spoil, gx_post)  # gradient spoiler or readout-re-winder
         + ge_segment_delay
     )
+
+    if ge_segment_delay > 0:
+        seq, _ = add_gre_receiver_gain_calibration(
+            system=system,
+            seq=seq,
+            rf_flip_angle=rf_flip_angle,
+            te=min_te,
+            fov_z=slice_thickness,
+        )
+        seq.add_block(pp.make_delay(1.0))
 
     # loop over frequency offsets
     for rep_idx, freq_offset_hz in enumerate(frequency_offsets):

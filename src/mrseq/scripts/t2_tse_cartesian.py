@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pypulseq as pp
 
+from mrseq.preparations.receiver_gain_calibration import add_se_receiver_gain_calibration
 from mrseq.utils import round_to_raster
 from mrseq.utils import sys_defaults
 
@@ -184,39 +185,15 @@ def t2_tse_cartesian_kernel(
     tau3 = round_to_raster(te / 2 - min_tau3, raster_time=system.grad_raster_time)
     print(f'\nCurrent echo time = {(te) * 1000:.3f} ms')
 
-    # recceiver gain calibration (needed for GE scanners)
-    n_receiver_gain_calibration = 1
-    for _ in range(n_receiver_gain_calibration):
-        seq.add_block(
-            pp.make_label(type='SET', label='NAV', value=True), pp.make_label(type='SET', label='TRID', value=3333)
+    if ge_segment_delay > 0:
+        seq, _ = add_se_receiver_gain_calibration(
+            system=system,
+            seq=seq,
+            te=te,
+            fov_z=fov_z,
+            adc_dwell_time=adc.dwell,
         )
-        _start_time_tr_block = sum(seq.block_durations.values())
-        seq.add_block(rf_ex, gz_ex)
-        seq.add_block(gzr_ex)
-        seq.add_block(pp.make_delay(tau1))
-
-        # add refocusing pulse with crusher gradients
-        seq.add_block(gz_crush)
-        seq.add_block(rf_ref, gz_ref)
-        seq.add_block(gz_crush)
-
-        seq.add_block(pp.make_delay(tau2))
-
-        # add pre gradients
-        seq.add_block(gx_pre)
-
-        # readout gradient and adc
-        seq.add_block(gx, adc)
-
-        # rewind gradients
-        seq.add_block(gx_post)
-
-        duration_tr_block = sum(seq.block_durations.values()) - _start_time_tr_block
-        tr_delay = round_to_raster(tr - duration_tr_block - ge_segment_delay, system.block_duration_raster)
-        if tr_delay < 0:
-            raise ValueError('Desired TR too short for given sequence parameters.')
-        seq.add_block(pp.make_delay(tr_delay))
-        seq.add_block(pp.make_label(type='SET', label='NAV', value=False))
+        seq.add_block(pp.make_delay(4.0))
 
     # add all events to the sequence
     for se in range(n_slice_encoding):

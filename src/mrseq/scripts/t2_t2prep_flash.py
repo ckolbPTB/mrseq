@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pypulseq as pp
 
+from mrseq.preparations.receiver_gain_calibration import add_gre_receiver_gain_calibration
 from mrseq.preparations.t2_prep import add_t2_prep
 from mrseq.utils import find_gx_flat_time_on_adc_raster
 from mrseq.utils import round_to_raster
@@ -231,6 +232,16 @@ def t2_t2prep_flash_kernel(
             factor=1.0,
             default_duration=0.8 - min_cardiac_trigger_delay,
         )
+
+    if ge_segment_delay > 0:
+        seq, _ = add_gre_receiver_gain_calibration(
+            system=system,
+            seq=seq,
+            rf_flip_angle=rf_flip_angle,
+            te=te_delay + min_te,
+            fov_z=slice_thickness,
+        )
+        seq.add_block(pp.make_delay(1.0))
 
     n_cycles_per_image = len(pe_steps) // n_pe_points_per_cardiac_cycle
     for t2_idx, t2_prep_echo_time in enumerate(t2_prep_echo_times):

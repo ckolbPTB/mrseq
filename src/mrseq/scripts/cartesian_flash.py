@@ -202,15 +202,15 @@ def cartesian_flash_kernel(
     print(f'\nCurrent echo time = {(min_te + te_delay) * 1000:.3f} ms')
     print(f'Current repetition time = {(current_min_tr + tr_delay) * 1000:.3f} ms')
 
-    seq, _ = add_gre_receiver_gain_calibration(
-        system=system,
-        seq=seq,
-        rf_flip_angle=rf_flip_angle,
-        te=te_delay + min_te,
-        fov_z=fov_z,
-        adc_dwell_time=adc.dwell * readout_oversampling,
-    )
-    seq.add_block(pp.make_delay(1.0))
+    if ge_segment_delay > 0:
+        seq, _ = add_gre_receiver_gain_calibration(
+            system=system,
+            seq=seq,
+            rf_flip_angle=rf_flip_angle,
+            te=te_delay + min_te,
+            fov_z=fov_z,
+        )
+        seq.add_block(pp.make_delay(1.0))
 
     # choose initial rf phase offset
     rf_phase = 0.0

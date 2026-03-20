@@ -9,6 +9,7 @@ import pypulseq as pp
 
 from mrseq.preparations import add_t1_inv_prep
 from mrseq.preparations import add_t2_prep
+from mrseq.preparations.receiver_gain_calibration import add_gre_receiver_gain_calibration
 from mrseq.utils import round_to_raster
 from mrseq.utils import spiral_acquisition
 from mrseq.utils import sys_defaults
@@ -229,6 +230,23 @@ def t1_t2_spiral_cmrf_kernel(
             factor=1.0,
             default_duration=0.5 - min_cardiac_trigger_delay,
         )
+
+    if ge_segment_delay > 0:
+        n_readout_rx_gain = 128
+        seq, _ = add_gre_receiver_gain_calibration(
+            system=system,
+            seq=seq,
+            rf_flip_angle=np.max(flip_angles) * 2,  # because spiral is sampled with a much shorter echo time
+            te=min_te + adc.dwell * n_readout / 2,
+            fov_z=slice_thickness,
+            n_readout=n_readout_rx_gain,
+        )
+        seq.add_block(pp.make_delay(1.0))
+
+        if mrd_header_file:
+            acq = ismrmrd.Acquisition()
+            acq.resize(trajectory_dimensions=2, number_of_samples=n_readout_rx_gain)
+            prot.append_acquisition(acq)
 
     for rep_ in range(n_repetitions):
         # initialize LIN label
