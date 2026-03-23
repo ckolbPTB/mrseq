@@ -47,8 +47,8 @@ def add_adia_sat_block(
     spoil_amp1 = -0.7 * system.max_grad  # Hz/m
     spoil_amp2 = 0.6 * system.max_grad  # Hz/m
 
-    rise_time = 1.0e-3  # spoiler rise time in seconds
-    spoil_dur = 5.5e-3  # complete spoiler duration in seconds
+    rise_time = 1.2e-3  # spoiler rise time in seconds
+    spoil_dur = 6.0e-3  # complete spoiler duration in seconds
 
     gx_spoil0, gy_spoil0, gz_spoil0 = (
         pp.make_trapezoid(channel=c, system=system, amplitude=spoil_amp0, duration=spoil_dur, rise_time=rise_time)

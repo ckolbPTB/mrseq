@@ -1,5 +1,7 @@
 """Receiver gain calibration for GRE and SE sequences."""
 
+import warnings
+
 import numpy as np
 import pypulseq as pp
 
@@ -102,7 +104,8 @@ def add_gre_receiver_gain_calibration(
     )
     te_delay = round_to_raster(te - min_te, system.block_duration_raster)
     if te_delay < 0:
-        raise ValueError(f'TE must be larger than {min_te * 1000:.3f} ms. Current value is {te * 1000:.3f} ms.')
+        warnings.warn(f'TE set to {min_te * 1000:.3f} ms. Previous value was {te * 1000:.3f} ms.', stacklevel=2)
+        te_delay = 0.0
 
     time_start = sum(seq.block_durations.values())
     seq.add_block(
@@ -173,7 +176,7 @@ def add_se_receiver_gain_calibration(
     )  # minimum time to set a label (in seconds)
 
     # create slice selective excitation pulse and gradients
-    rf_duration = round_to_raster(0.9e-3, system.rf_raster_time)
+    rf_duration = round_to_raster(1.4e-3, system.rf_raster_time)
     rf_bwt = 2
     rf_apodization = 0.5
     # create slice selective excitation pulse and gradients

@@ -127,6 +127,7 @@ def adc_epi2d_se_kernel(
     # create diffusion gradient object for timing calculations
     diff_prep = DiffusionPrep(
         system,
+        fov_z=slice_thickness,
         rf_ref_duration=rf_ex_duration * 2,
         rf_ref_bwt=rf_ex_bwt,
         rf_ref_width_scale_factor=2,
