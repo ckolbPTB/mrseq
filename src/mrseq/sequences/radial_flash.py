@@ -279,6 +279,14 @@ def radial_flash_kernel(
     if mrd_header_file:
         prot.close()
 
+    # write all required parameters in the seq-file header/definitions
+    seq.set_definition('FOV', [fov_xy, fov_xy, slice_thickness * n_slices])
+    seq.set_definition('ReconMatrix', (n_readout, n_readout, 1))
+    seq.set_definition('SliceThickness', slice_thickness)
+    seq.set_definition('TE', te or min_te)
+    seq.set_definition('TR', tr or min_tr)
+    seq.set_definition('ReadoutOversamplingFactor', readout_oversampling)
+
     return seq, min_te, min_tr
 
 
@@ -374,7 +382,7 @@ def main(
     if (output_path / Path(filename + '_header.h5')).exists():
         (output_path / Path(filename + '_header.h5')).unlink()
 
-    seq, min_te, min_tr = radial_flash_kernel(
+    seq, _min_te, min_tr = radial_flash_kernel(
         system=system,
         te=te,
         tr=tr,
@@ -411,14 +419,6 @@ def main(
     if test_report:
         print('\nCreating advanced test report...')
         print(seq.test_report())
-
-    # write all required parameters in the seq-file header/definitions
-    seq.set_definition('FOV', [fov_xy, fov_xy, slice_thickness * n_slices])
-    seq.set_definition('ReconMatrix', (n_readout, n_readout, 1))
-    seq.set_definition('SliceThickness', slice_thickness)
-    seq.set_definition('TE', te or min_te)
-    seq.set_definition('TR', tr or min_tr)
-    seq.set_definition('ReadoutOversamplingFactor', readout_oversampling)
 
     # save seq-file to disk
     print(f"\nSaving sequence file '{filename}.seq' into folder '{output_path}'.")
