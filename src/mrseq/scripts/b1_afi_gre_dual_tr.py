@@ -32,6 +32,7 @@ def b1_afi_gre_dual_tr_kernel(
     gx_spoil_area: float,
     gx_spoil_slew_rate: float,
     ge_segment_delay: float,
+    ge_pislquant: int,
 ) -> tuple[pp.Sequence, float]:
     """Generate an AFI (Actual Flip Angle) sequence for B1 mapping.
 
@@ -79,6 +80,8 @@ def b1_afi_gre_dual_tr_kernel(
         Max slew rate of spoiler gradient
     ge_segment_delay
         Additional delay time after each readout for GE scanners (in seconds).
+    ge_pislquant
+        Number of readouts added for receiver gain calibration
 
     Returns
     -------
@@ -190,12 +193,11 @@ def b1_afi_gre_dual_tr_kernel(
 
     print(f'\nMinimum TE: {min_te * 1000:.3f} ms')
 
-    if ge_segment_delay > 0:
+    if ge_pislquant > 0:
         seq, _ = add_gre_receiver_gain_calibration(
             system=system,
             seq=seq,
-            rf_flip_angle=rf_flip_angle,
-            te=te_delay + min_te,
+            n_rep=ge_pislquant,
             fov_z=fov_z,
         )
         seq.add_block(pp.make_delay(1.0))
@@ -402,6 +404,7 @@ def main(
         gx_spoil_area=gx_spoil_area,
         gx_spoil_slew_rate=gx_spoil_slew_rate,
         ge_segment_delay=0.0,
+        ge_pislquant=0,
     )
 
     # check timing of the sequence

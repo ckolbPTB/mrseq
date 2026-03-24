@@ -365,8 +365,8 @@ def ismrmrd_from_sequence(adc_data_list: Sequence[np.ndarray], filename_seq: str
     # Create new file
     ds = ismrmrd.Dataset(filename_mrd, create_if_needed=True)
 
-    n_readout = adc_data_list[0].shape[-1]
-    num_channels = adc_data_list[0].shape[-2]
+    n_readout = adc_data_list[-1].shape[-1]
+    num_channels = adc_data_list[-1].shape[-2]
     n_phase_encoding = max(adc_labels.get('LIN', (0,))) - min(adc_labels.get('LIN', (0,))) + 1
     n_slice_encoding = max(adc_labels.get('PAR', (0,))) - min(adc_labels.get('PAR', (0,))) + 1
     hdr = create_header(
@@ -409,6 +409,8 @@ def ismrmrd_from_sequence(adc_data_list: Sequence[np.ndarray], filename_seq: str
     # add acquisitions with trajectory information
     for idx, adc_data in enumerate(adc_data_list):
         acq = ismrmrd.Acquisition()
+        n_readout = adc_data.shape[-1]
+        num_channels = adc_data.shape[-2]
         acq.resize(n_readout, num_channels)
         acq.data[:] = adc_data
 
@@ -437,7 +439,7 @@ def ismrmrd_from_sequence(adc_data_list: Sequence[np.ndarray], filename_seq: str
             acq.setFlag(ismrmrd.ACQ_IS_PARALLEL_CALIBRATION_AND_IMAGING)
 
         if adc_labels.get('PMC')[idx] if 'PMC' in adc_labels else 0:
-            acq.setFlag(ismrmrd.ACQ_IS_RTFEEDBACK_DATA.value)
+            acq.setFlag(ismrmrd.ACQ_IS_RTFEEDBACK_DATA)
 
         ds.append_acquisition(acq)
 

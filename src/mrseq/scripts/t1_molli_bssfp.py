@@ -47,6 +47,7 @@ def t1_molli_bssfp_kernel(
     rf_inv_spoil_flattime: float,
     rf_inv_mu: float,
     ge_segment_delay: float,
+    ge_pislquant: int,
     mrd_header_file: str | Path | None,
 ) -> tuple[pp.Sequence, float, float]:
     """Generate a 5(3)3 MOLLI sequence with bSSFP readout for cardiac T1 mapping.
@@ -107,6 +108,8 @@ def t1_molli_bssfp_kernel(
         Constant determining amplitude of frequency sweep of adiabatic inversion pulse
     ge_segment_delay
         Delay time at the end of each segment for GE scanners.
+    ge_pislquant
+        Number of readouts added for receiver gain calibration
     mrd_header_file
         Filename of the ISMRMRD header file to be created. If None, no header file is created.
 
@@ -255,13 +258,12 @@ def t1_molli_bssfp_kernel(
         rf_mu=rf_inv_mu,
     )
 
-    if ge_segment_delay > 0:
+    if ge_pislquant > 0:
         n_readout_rx_gain = 128
         seq, _ = add_gre_receiver_gain_calibration(
             system=system,
             seq=seq,
-            rf_flip_angle=rf_flip_angle,
-            te=te_delay + min_te,
+            n_rep=ge_pislquant,
             fov_z=slice_thickness,
             n_readout=n_readout_rx_gain,
         )
@@ -582,6 +584,7 @@ def main(
         rf_inv_spoil_flattime=rf_inv_spoil_flattime,
         rf_inv_mu=rf_inv_mu,
         ge_segment_delay=0.0,
+        ge_pislquant=0,
         mrd_header_file=output_path / Path(filename + '_header.h5'),
     )
 

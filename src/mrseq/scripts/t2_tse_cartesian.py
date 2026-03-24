@@ -31,6 +31,7 @@ def t2_tse_cartesian_kernel(
     gz_crusher_duration: float,
     gz_crusher_area: float,
     ge_segment_delay: float,
+    ge_pislquant: int,
 ) -> tuple[pp.Sequence, float]:
     """Generate a Cartesian TSE sequence for T2-mapping.
 
@@ -76,6 +77,8 @@ def t2_tse_cartesian_kernel(
         Area (zeroth gradient moment) of the crusher gradients applied around the 180° pulse.
     ge_segment_delay
         Delay time at the end of each segment for GE scanners.
+    ge_pislquant
+        Number of readouts added for receiver gain calibration
 
     Returns
     -------
@@ -185,11 +188,11 @@ def t2_tse_cartesian_kernel(
     tau3 = round_to_raster(te / 2 - min_tau3, raster_time=system.grad_raster_time)
     print(f'\nCurrent echo time = {(te) * 1000:.3f} ms')
 
-    if ge_segment_delay > 0:
+    if ge_pislquant > 0:
         seq, _ = add_se_receiver_gain_calibration(
             system=system,
             seq=seq,
-            te=te,
+            n_rep=ge_pislquant,
             fov_z=fov_z,
         )
         seq.add_block(pp.make_delay(4.0))
@@ -338,6 +341,7 @@ def main(
         gz_crusher_duration=gz_crusher_duration,
         gz_crusher_area=gz_crusher_area,
         ge_segment_delay=0.0,
+        ge_pislquant=0,
     )
 
     # check timing of the sequence

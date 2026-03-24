@@ -42,6 +42,7 @@ def t1_t2_spiral_cmrf_kernel(
     rf_bwt: float,
     rf_apodization: float,
     ge_segment_delay: float,
+    ge_pislquant: int,
     mrd_header_file: str | None,
 ) -> tuple[pp.Sequence, float, float]:
     """Generate a cardiac MR Fingerprinting sequence with spiral readout.
@@ -94,6 +95,8 @@ def t1_t2_spiral_cmrf_kernel(
         Delay time at the end of each segment for GE scanners.
     mrd_header_file
         Filename of the ISMRMRD header file. If None, no header file is created.
+    ge_pislquant
+        Number of readouts added for receiver gain calibration
 
     Returns
     -------
@@ -231,13 +234,12 @@ def t1_t2_spiral_cmrf_kernel(
             default_duration=0.5 - min_cardiac_trigger_delay,
         )
 
-    if ge_segment_delay > 0:
+    if ge_pislquant > 0:
         n_readout_rx_gain = 128
         seq, _ = add_gre_receiver_gain_calibration(
             system=system,
             seq=seq,
-            rf_flip_angle=np.max(flip_angles) * 2,  # because spiral is sampled with a much shorter echo time
-            te=min_te + adc.dwell * n_readout / 2,
+            n_rep=ge_pislquant,
             fov_z=slice_thickness,
             n_readout=n_readout_rx_gain,
         )
@@ -535,6 +537,7 @@ def main(
         rf_bwt=rf_bwt,
         rf_apodization=rf_apodization,
         ge_segment_delay=0.0,
+        ge_pislquant=0,
         mrd_header_file=str(output_path / Path(filename + '_header.h5')),
     )
 

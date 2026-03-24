@@ -39,6 +39,7 @@ def wasabiti_gre_centric_kernel(
     gz_spoil_duration: float,
     gz_spoil_area: float,
     ge_segment_delay: float,
+    ge_pislquant: int,
 ) -> pp.Sequence:
     """Generate a WASABI sequence for simultaneous B0 and B1 mapping using a centric-out cartesian GRE readout.
 
@@ -90,6 +91,8 @@ def wasabiti_gre_centric_kernel(
         Area of spoiler gradient (in 1/meters = Hz/m * s).
     ge_segment_delay
         Delay time at the end of each segment for GE scanners.
+    ge_pislquant
+        Number of readouts added for receiver gain calibration
 
     Returns
     -------
@@ -191,13 +194,12 @@ def wasabiti_gre_centric_kernel(
         + ge_segment_delay
     )
 
-    if ge_segment_delay > 0:
+    if ge_pislquant > 0:
         seq, _ = add_gre_receiver_gain_calibration(
             system=system,
             seq=seq,
-            rf_flip_angle=rf_flip_angle,
-            te=min_te,
             fov_z=slice_thickness,
+            n_rep=ge_pislquant,
         )
         seq.add_block(pp.make_delay(1.0))
 
@@ -392,6 +394,7 @@ def main(
         gz_spoil_area=gz_spoil_area,
         gz_spoil_duration=gz_spoil_duration,
         ge_segment_delay=0.0,
+        ge_pislquant=0,
     )
 
     # check timing of the sequence

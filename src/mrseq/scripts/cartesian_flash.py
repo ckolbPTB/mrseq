@@ -34,6 +34,7 @@ def cartesian_flash_kernel(
     gz_spoil_duration: float,
     gz_spoil_area: float,
     ge_segment_delay: float,
+    ge_pislquant: int,
 ) -> tuple[pp.Sequence, float, float]:
     """Generate a 3D Cartesian FLASH sequence.
 
@@ -79,6 +80,8 @@ def cartesian_flash_kernel(
         Area of spoiler gradient (in mT/m * s)
     ge_segment_delay
         Delay time at the end of each segment for GE scanners.
+    ge_pislquant
+        Number of readouts added for receiver gain calibration
 
     Returns
     -------
@@ -202,12 +205,11 @@ def cartesian_flash_kernel(
     print(f'\nCurrent echo time = {(min_te + te_delay) * 1000:.3f} ms')
     print(f'Current repetition time = {(current_min_tr + tr_delay) * 1000:.3f} ms')
 
-    if ge_segment_delay > 0:
+    if ge_pislquant > 0:
         seq, _ = add_gre_receiver_gain_calibration(
             system=system,
             seq=seq,
-            rf_flip_angle=rf_flip_angle,
-            te=te_delay + min_te,
+            n_rep=ge_pislquant,
             fov_z=fov_z,
         )
         seq.add_block(pp.make_delay(1.0))
@@ -382,6 +384,7 @@ def main(
         gz_spoil_duration=gz_spoil_duration,
         gz_spoil_area=gz_spoil_area,
         ge_segment_delay=0.0,
+        ge_pislquant=0,
     )
 
     # check timing of the sequence

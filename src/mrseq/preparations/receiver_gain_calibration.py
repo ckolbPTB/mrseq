@@ -18,7 +18,8 @@ def add_gre_receiver_gain_calibration(
     fov_z: float = 8e-3,
     fov_xy: float = 100e-3,
     n_readout: int = 128,
-    adc_dwell_time: float = 24e-6,
+    adc_dwell_time: float = 10e-6,
+    n_rep: int = 1,
 ):
     """Gradient echo receiver gain calibration.
 
@@ -42,6 +43,8 @@ def add_gre_receiver_gain_calibration(
         Number of frequency encoding steps.
     adc_dwell_time
         ADC dwell time (in seconds).
+    n_rep
+        Repetitions of gradient echo block
 
     Returns
     -------
@@ -108,13 +111,16 @@ def add_gre_receiver_gain_calibration(
         te_delay = 0.0
 
     time_start = sum(seq.block_durations.values())
-    seq.add_block(
-        rf, gz, pp.make_label(type='SET', label='TRID', value=8888), pp.make_label(label='PMC', type='SET', value=1)
-    )
-    seq.add_block(gx_pre, gzr)
-    seq.add_block(pp.make_delay(te_delay))
-    seq.add_block(gx, adc)
-    seq.add_block(pp.make_delay(minimum_time_to_set_label), pp.make_label(label='PMC', type='SET', value=0))
+    for rep_idx in range(n_rep):
+        seq.add_block(
+            rf, gz, pp.make_label(type='SET', label='TRID', value=8888), pp.make_label(label='PMC', type='SET', value=1)
+        )
+        seq.add_block(gx_pre, gzr)
+        seq.add_block(pp.make_delay(te_delay))
+        seq.add_block(gx, adc)
+        seq.add_block(pp.make_delay(minimum_time_to_set_label), pp.make_label(label='PMC', type='SET', value=0))
+        if rep_idx < n_rep - 1:
+            seq.add_block(pp.make_delay(0.02))
     block_duration = sum(seq.block_durations.values()) - time_start
 
     return seq, block_duration
@@ -123,13 +129,14 @@ def add_gre_receiver_gain_calibration(
 def add_se_receiver_gain_calibration(
     system: pp.Opts | None = None,
     seq: pp.Sequence | None = None,
-    te: float = 10e-3,
+    te: float = 14e-3,
     fov_z: float = 8e-3,
     fov_xy: float = 100e-3,
     n_readout: int = 128,
     adc_dwell_time: float = 24e-6,
-    gz_crusher_duration: float = 1.6e-3,
+    gz_crusher_duration: float = 2.0e-3,
     gz_crusher_area: float = 400,
+    n_rep: int = 1,
 ):
     """Spin echo receiver gain calibration.
 
@@ -155,6 +162,8 @@ def add_se_receiver_gain_calibration(
         Duration of the crusher gradients applied around the 180° pulse.
     gz_crusher_area
         Area (zeroth gradient moment) of the crusher gradients applied around the 180° pulse.
+    n_rep
+        Repetitions of gradient echo block
 
     Returns
     -------
@@ -176,7 +185,7 @@ def add_se_receiver_gain_calibration(
     )  # minimum time to set a label (in seconds)
 
     # create slice selective excitation pulse and gradients
-    rf_duration = round_to_raster(1.4e-3, system.rf_raster_time)
+    rf_duration = round_to_raster(2.0e-3, system.rf_raster_time)
     rf_bwt = 2
     rf_apodization = 0.5
     # create slice selective excitation pulse and gradients
@@ -256,17 +265,23 @@ def add_se_receiver_gain_calibration(
     print(f'\nCurrent echo time = {(te) * 1000:.3f} ms')
 
     time_start = sum(seq.block_durations.values())
-    seq.add_block(
-        rf_ex, gz, pp.make_label(type='SET', label='TRID', value=8888), pp.make_label(label='PMC', type='SET', value=1)
-    )
-    seq.add_block(gx_pre, gzr)
-    seq.add_block(pp.make_delay(tau1))
-    seq.add_block(gz_crush)
-    seq.add_block(rf_ref, gz_ref)
-    seq.add_block(gz_crush)
-    seq.add_block(pp.make_delay(tau2))
-    seq.add_block(gx, adc)
-    seq.add_block(pp.make_delay(minimum_time_to_set_label), pp.make_label(label='PMC', type='SET', value=0))
+    for rep_idx in range(n_rep):
+        seq.add_block(
+            rf_ex,
+            gz,
+            pp.make_label(type='SET', label='TRID', value=8888),
+            pp.make_label(label='PMC', type='SET', value=1),
+        )
+        seq.add_block(gx_pre, gzr)
+        seq.add_block(pp.make_delay(tau1))
+        seq.add_block(gz_crush)
+        seq.add_block(rf_ref, gz_ref)
+        seq.add_block(gz_crush)
+        seq.add_block(pp.make_delay(tau2))
+        seq.add_block(gx, adc)
+        seq.add_block(pp.make_delay(minimum_time_to_set_label), pp.make_label(label='PMC', type='SET', value=0))
+        if rep_idx < n_rep - 1:
+            seq.add_block(pp.make_delay(0.1))
 
     block_duration = sum(seq.block_durations.values()) - time_start
 

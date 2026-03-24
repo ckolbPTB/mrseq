@@ -39,6 +39,7 @@ def t2_t2prep_flash_kernel(
     gz_spoil_duration: float,
     gz_spoil_area: float,
     ge_segment_delay: float,
+    ge_pislquant: int,
 ) -> tuple[pp.Sequence, float, float]:
     """Generate a FLASH sequence with T2-preparation pulses.
 
@@ -96,6 +97,8 @@ def t2_t2prep_flash_kernel(
         Area of spoiler gradient (in 1/meters = Hz/m * s).
     ge_segment_delay
         Delay time at the end of each segment for GE scanners.
+    ge_pislquant
+        Number of readouts added for receiver gain calibration
 
     Returns
     -------
@@ -233,12 +236,11 @@ def t2_t2prep_flash_kernel(
             default_duration=0.8 - min_cardiac_trigger_delay,
         )
 
-    if ge_segment_delay > 0:
+    if ge_pislquant > 0:
         seq, _ = add_gre_receiver_gain_calibration(
             system=system,
             seq=seq,
-            rf_flip_angle=rf_flip_angle,
-            te=te_delay + min_te,
+            n_rep=ge_pislquant,
             fov_z=slice_thickness,
         )
         seq.add_block(pp.make_delay(1.0))
@@ -490,6 +492,7 @@ def main(
         gz_spoil_duration=gz_spoil_duration,
         gz_spoil_area=gz_spoil_area,
         ge_segment_delay=0.0,
+        ge_pislquant=0,
     )
 
     # check timing of the sequence

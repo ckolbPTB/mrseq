@@ -45,6 +45,7 @@ def adc_epi2d_se_kernel(
     g_diff_max_slew_rate: float,
     g_diff_delta_time: float,
     ge_segment_delay: float,
+    ge_pislquant: int,
     mrd_header_file: str | Path | None,
 ) -> tuple[pp.Sequence, float, float]:
     """Generate a 2D Echo Planar Imaging (EPI) sequence for ADC mapping..
@@ -98,6 +99,8 @@ def adc_epi2d_se_kernel(
         Time between beginning of first and second diffusion gradient.
     ge_segment_delay
         Delay time at the end of each segment for GE scanners.
+    ge_pislquant
+        Number of readouts added for receiver gain calibration
     mrd_header_file
         Filename of the ISMRMRD header file to be created. If None, no header file is created.
 
@@ -254,7 +257,7 @@ def adc_epi2d_se_kernel(
             epi2d.gx.rise_time, epi2d.gx.flat_time, epi2d.gx.fall_time, abs(epi2d.gx.amplitude), nav_sample_times
         )
 
-    if ge_segment_delay > 0:
+    if ge_pislquant > 0:
         n_readout_rx_gain = 128
         seq, _ = add_se_receiver_gain_calibration(
             system=system,
@@ -559,6 +562,7 @@ def main(
         g_diff_max_slew_rate=system.max_slew * 0.8,
         g_diff_delta_time=g_diff_delta_time,
         ge_segment_delay=0.0,
+        ge_pislquant=0,
         mrd_header_file=mrd_file,
     )
 
