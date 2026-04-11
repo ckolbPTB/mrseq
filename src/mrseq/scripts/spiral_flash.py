@@ -25,6 +25,7 @@ def spiral_flash_kernel(
     n_readout: int,
     readout_oversampling: Literal[1, 2, 4],
     spiral_undersampling: float,
+    unique_spiral_arms: int,
     slice_thickness: float,
     n_slices: int,
     n_dummy_excitations: int,
@@ -193,19 +194,9 @@ def spiral_flash_kernel(
         prot = ismrmrd.Dataset(mrd_header_file, 'w')
         prot.write_xml_header(hdr.toXML('utf-8'))
 
-    # obtain noise samples
-    seq.add_block(pp.make_label(label='LIN', type='SET', value=0), pp.make_label(label='SLC', type='SET', value=0))
-    seq.add_block(adc, pp.make_label(label='NOISE', type='SET', value=True))
-    seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))
-    seq.add_block(pp.make_delay(system.rf_dead_time))
-
-    if mrd_header_file:
-        acq = ismrmrd.Acquisition()
-        acq.resize(trajectory_dimensions=2, number_of_samples=adc.num_samples)
-        prot.append_acquisition(acq)
-
     for slice_ in range(n_slices):
         for spiral_ in range(-n_dummy_excitations, len(gx)):
+            spiral_ = int(np.mod(spiral_, unique_spiral_arms))
             # calculate current phase_offset if rf_spoiling is activated
             if rf_spoiling_phase_increment > 0:
                 rf.phase_offset = rf_phase / 180 * np.pi
@@ -215,7 +206,7 @@ def spiral_flash_kernel(
             rf.freq_offset = gz.amplitude * slice_thickness * (slice_ - (n_slices - 1) / 2)
 
             # add slice selective excitation pulse
-            seq.add_block(rf, gz)
+            seq.add_block(rf, gz, pp.make_label(type='SET', label='TRID', value=int(1 + spiral_)))
             seq.add_block(gzr)
 
             # update rf phase offset for the next excitation pulse
@@ -250,6 +241,22 @@ def spiral_flash_kernel(
                 acq.resize(trajectory_dimensions=2, number_of_samples=adc.num_samples)
                 acq.traj[:] = spiral_trajectory
                 prot.append_acquisition(acq)
+
+    # obtain noise samples
+    seq.add_block(
+        pp.make_delay(0.1),
+        pp.make_label(label='LIN', type='SET', value=0),
+        pp.make_label(label='SLC', type='SET', value=0),
+        pp.make_label(type='SET', label='TRID', value=2099),
+    )
+    seq.add_block(adc, pp.make_label(label='NOISE', type='SET', value=True))
+    seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))
+    seq.add_block(pp.make_delay(system.rf_dead_time))
+
+    if mrd_header_file:
+        acq = ismrmrd.Acquisition()
+        acq.resize(trajectory_dimensions=2, number_of_samples=adc.num_samples)
+        prot.append_acquisition(acq)
 
     # close ISMRMRD file
     if mrd_header_file:

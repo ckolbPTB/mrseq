@@ -1,5 +1,6 @@
 """Utilities to deal with creating ISMRMRD files."""
 
+import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -326,7 +327,9 @@ def combine_ismrmrd_files(data_file: Path, meta_file: Path, filename_ext: str = 
     return ds
 
 
-def ismrmrd_from_sequence(adc_data_list: Sequence[np.ndarray], filename_seq: str, filename_mrd: str) -> ismrmrd.Dataset:
+def ismrmrd_from_sequence(
+    adc_data_list: Sequence[np.ndarray], filename_seq: str, filename_mrd: str, timestamps: Sequence[float] | None = None
+) -> ismrmrd.Dataset:
     """Create ismrmrd file based on list of adc data and pulseq sequence file.
 
     Parameters
@@ -362,6 +365,16 @@ def ismrmrd_from_sequence(adc_data_list: Sequence[np.ndarray], filename_seq: str
         else 1.0
     )
 
+    def get_sequence_definition(sequence, definition_parameter: str, value_scaling: float = 1.0):
+        value = sequence.get_definition(definition_parameter)
+        if isinstance(value, np.ndarray):
+            return [val.item() for val in (value_scaling * value)]
+        if isinstance(value, np.generic):
+            return [value_scaling * float(value)]
+        if len(value) == 0:
+            return []
+        return value
+
     # Create new file
     ds = ismrmrd.Dataset(filename_mrd, create_if_needed=True)
 
@@ -369,12 +382,17 @@ def ismrmrd_from_sequence(adc_data_list: Sequence[np.ndarray], filename_seq: str
     num_channels = adc_data_list[-1].shape[-2]
     n_phase_encoding = max(adc_labels.get('LIN', (0,))) - min(adc_labels.get('LIN', (0,))) + 1
     n_slice_encoding = max(adc_labels.get('PAR', (0,))) - min(adc_labels.get('PAR', (0,))) + 1
+    recon_matrix = get_sequence_definition(sequence, 'ReconMatrix')
+
+    if (n_k0 := n_readout / readout_oversampling) != (n_kx := recon_matrix[0]):
+        warnings.warn(f'Mismatch of recon matrix {n_kx} and encoding matrix along readout {n_k0}.', stacklevel=2)
+
     hdr = create_header(
         traj_type='cartesian',
         encoding_fov=Fov(*sequence.get_definition('FOV').tolist()),
         recon_fov=Fov(*sequence.get_definition('FOV').tolist()),
         encoding_matrix=MatrixSize(n_x=n_readout, n_y=n_phase_encoding, n_z=n_slice_encoding),
-        recon_matrix=MatrixSize(n_x=int(n_readout / readout_oversampling), n_y=n_phase_encoding, n_z=n_slice_encoding),
+        recon_matrix=MatrixSize(n_x=int(recon_matrix[0]), n_y=int(recon_matrix[1]), n_z=int(recon_matrix[2])),
         dwell_time=adc_blocks[0].dwell,
         k1_limits=Limits.from_label_list(adc_labels.get('LIN', (0,))),
         k2_limits=Limits.from_label_list(adc_labels.get('PAR', (0,))),
@@ -387,16 +405,6 @@ def ismrmrd_from_sequence(adc_data_list: Sequence[np.ndarray], filename_seq: str
         h1_resonance_freq=sequence.system.gamma * sequence.system.B0,
     )
 
-    def get_sequence_definition(sequence, definition_parameter: str, value_scaling: float = 1.0):
-        value = sequence.get_definition(definition_parameter)
-        if isinstance(value, np.ndarray):
-            return [val.item() for val in (value_scaling * value)]
-        if isinstance(value, np.generic):
-            return [value_scaling * float(value)]
-        if len(value) == 0:
-            return []
-        return value
-
     # Sequence Information
     seq = ismrmrd.xsd.sequenceParametersType()
     seq.TR = get_sequence_definition(sequence, 'TR', 1e3)
@@ -406,42 +414,51 @@ def ismrmrd_from_sequence(adc_data_list: Sequence[np.ndarray], filename_seq: str
 
     ds.write_xml_header(hdr.toXML())
 
+    if timestamps is not None and ((n_timestamps := len(timestamps)) != (n_acq := len(adc_data_list))):
+        raise ValueError(f'Time stamps ({n_timestamps}) and acquisitions ({n_acq}) does not match.')
+
     # add acquisitions with trajectory information
+    pmc_idx = 0
     for idx, adc_data in enumerate(adc_data_list):
-        acq = ismrmrd.Acquisition()
-        n_readout = adc_data.shape[-1]
-        num_channels = adc_data.shape[-2]
-        acq.resize(n_readout, num_channels)
-        acq.data[:] = adc_data
+        if 'PMC' not in adc_labels or pmc_idx == 0 or not adc_labels.get('PMC')[idx]:
+            acq = ismrmrd.Acquisition()
+            n_readout = adc_data.shape[-1]
+            num_channels = adc_data.shape[-2]
+            acq.resize(n_readout, num_channels)
+            acq.data[:] = adc_data
 
-        acq.center_sample = round(n_readout / 2)
+            acq.center_sample = round(n_readout / 2)
 
-        acq.idx.kspace_encode_step_1 = adc_labels.get('LIN')[idx] if 'LIN' in adc_labels else 0
-        acq.idx.kspace_encode_step_2 = adc_labels.get('PAR')[idx] if 'PAR' in adc_labels else 0
-        acq.idx.slice = adc_labels.get('SLC')[idx] if 'SLC' in adc_labels else 0
-        acq.idx.contrast = adc_labels.get('ECO')[idx] if 'ECO' in adc_labels else 0
-        acq.idx.repetition = adc_labels.get('REP')[idx] if 'REP' in adc_labels else 0
-        acq.idx.phase = adc_labels.get('PHS')[idx] if 'PHS' in adc_labels else 0
-        acq.idx.set = adc_labels.get('SET')[idx] if 'SET' in adc_labels else 0
+            if timestamps is not None:
+                acq.acquisition_time_stamp = int(timestamps[idx] / 2.5e3)
 
-        acq.read_dir = (1.0, 0.0, 0.0)
-        acq.phase_dir = (0.0, 1.0, 0.0)
-        acq.slice_dir = (0.0, 0.0, 1.0)
+            acq.idx.kspace_encode_step_1 = adc_labels.get('LIN')[idx] if 'LIN' in adc_labels else 0
+            acq.idx.kspace_encode_step_2 = adc_labels.get('PAR')[idx] if 'PAR' in adc_labels else 0
+            acq.idx.slice = adc_labels.get('SLC')[idx] if 'SLC' in adc_labels else 0
+            acq.idx.contrast = adc_labels.get('ECO')[idx] if 'ECO' in adc_labels else 0
+            acq.idx.repetition = adc_labels.get('REP')[idx] if 'REP' in adc_labels else 0
+            acq.idx.phase = adc_labels.get('PHS')[idx] if 'PHS' in adc_labels else 0
+            acq.idx.set = adc_labels.get('SET')[idx] if 'SET' in adc_labels else 0
 
-        # Flags
-        if adc_labels.get('NAV')[idx] if 'NAV' in adc_labels else 0:
-            acq.setFlag(ismrmrd.ACQ_IS_PHASECORR_DATA)
+            acq.read_dir = (1.0, 0.0, 0.0)
+            acq.phase_dir = (0.0, 1.0, 0.0)
+            acq.slice_dir = (0.0, 0.0, 1.0)
 
-        if adc_labels.get('NOISE')[idx] if 'NOISE' in adc_labels else 0:
-            acq.setFlag(ismrmrd.ACQ_IS_NOISE_MEASUREMENT)
+            # Flags
+            if adc_labels.get('NAV')[idx] if 'NAV' in adc_labels else 0:
+                acq.setFlag(ismrmrd.ACQ_IS_PHASECORR_DATA)
 
-        if adc_labels.get('IMA')[idx] if 'IMA' in adc_labels else 0:
-            acq.setFlag(ismrmrd.ACQ_IS_PARALLEL_CALIBRATION_AND_IMAGING)
+            if adc_labels.get('NOISE')[idx] if 'NOISE' in adc_labels else 0:
+                acq.setFlag(ismrmrd.ACQ_IS_NOISE_MEASUREMENT)
 
-        if adc_labels.get('PMC')[idx] if 'PMC' in adc_labels else 0:
-            acq.setFlag(ismrmrd.ACQ_IS_RTFEEDBACK_DATA)
+            if adc_labels.get('IMA')[idx] if 'IMA' in adc_labels else 0:
+                acq.setFlag(ismrmrd.ACQ_IS_PARALLEL_CALIBRATION_AND_IMAGING)
 
-        ds.append_acquisition(acq)
+            if adc_labels.get('PMC')[idx] if 'PMC' in adc_labels else 0:
+                acq.setFlag(ismrmrd.ACQ_IS_RTFEEDBACK_DATA)
+                pmc_idx += 1
+
+            ds.append_acquisition(acq)
 
     ds.close()
 

@@ -324,10 +324,9 @@ def adc_epi2d_se_kernel(
                     )
 
                     # Navigator kx offset: starts from -gx_pre.area (reversed pre-winder)
-                    nav_kx_offset = -epi2d.gx_pre.area
-                    nav_gx_sign = -1.0  # first navigator uses reversed gx
+                    nav_kx_offset = epi2d.gx_pre.area
 
-                    # add 3 navigator acquisitions
+                    # add navigator acquisitions
                     for n in range(n_navigator_acq):
                         gx_sign = (-1) ** n
                         seq.add_block(
@@ -343,10 +342,7 @@ def adc_epi2d_se_kernel(
                             assert prot is not None
                             n_samples = epi2d.adc.num_samples
                             traj = np.zeros((n_samples, 2), dtype=np.float32)
-                            if nav_gx_sign > 0:
-                                nav_kx = nav_kx_offset + nav_kx_forward
-                            else:
-                                nav_kx = nav_kx_offset - nav_kx_forward
+                            nav_kx = nav_kx_offset + gx_sign * nav_kx_forward
                             traj[:, 0] = nav_kx * fov_xy * readout_oversampling
                             acq = ismrmrd.Acquisition()
                             acq.resize(trajectory_dimensions=2, number_of_samples=n_samples)

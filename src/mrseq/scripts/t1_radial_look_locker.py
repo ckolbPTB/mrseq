@@ -234,9 +234,10 @@ def t1_radial_look_locker_kernel(
         seq.add_block(pp.make_delay(1.0))
 
         if mrd_header_file:
-            acq = ismrmrd.Acquisition()
-            acq.resize(trajectory_dimensions=2, number_of_samples=n_readout_rx_gain)
-            prot.append_acquisition(acq)
+            for _ in range(ge_pislquant):
+                acq = ismrmrd.Acquisition()
+                acq.resize(trajectory_dimensions=2, number_of_samples=n_readout_rx_gain)
+                prot.append_acquisition(acq)
 
     for rep_ in range(n_repetitions):
         # Create inversion pulse

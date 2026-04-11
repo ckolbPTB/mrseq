@@ -15,6 +15,7 @@ from mrseq.utils import write_sequence
 def multi_echo_flash_kernel(
     system: pp.Opts,
     te: float | None,
+    n_echo_shifts: int,
     delta_te: float | None,
     tr: float | None,
     n_echoes: int,
@@ -24,7 +25,6 @@ def multi_echo_flash_kernel(
     readout_oversampling: int,
     n_phase_encoding: int,
     n_dummy_excitations: int,
-    n_repetitions: int,
     gx_pre_duration: float,
     gx_flat_time: float,
     rf_duration: float,
@@ -36,7 +36,7 @@ def multi_echo_flash_kernel(
     gz_spoil_area: float,
     ge_segment_delay: float,
     ge_pislquant: int,
-) -> tuple[pp.Sequence, float, float, float]:
+) -> tuple[pp.Sequence, float, float, float, float]:
     """Generate a 2D multi-echo FLASH sequence.
 
     Parameters
@@ -45,8 +45,10 @@ def multi_echo_flash_kernel(
         PyPulseq system limits object.
     te
         Desired echo time (TE) of first echo (in seconds). Minimum echo time is used if set to None.
+    n_echo_shifts
+        The sequence is repeated n_echo_shifts times, each time the echo train is shifted by delta_te/n_echo_shifts * n
     delta_te
-            Desired echo spacing (in seconds). Minimum echo spacing is used if set to None.
+        Desired echo spacing (in seconds). Minimum echo spacing is used if set to None.
     tr
         Desired repetition time (TR) (in seconds).
     n_echoes
@@ -96,6 +98,8 @@ def multi_echo_flash_kernel(
         Shortest possible repetition time.
     delta_te
         Time between echoes.
+    echo_shift
+        Shift of echoes between repetitions.
 
     """
     if readout_oversampling < 1:
@@ -103,6 +107,9 @@ def multi_echo_flash_kernel(
 
     if n_dummy_excitations < 0:
         raise ValueError('Number of dummy excitations must be >= 0.')
+
+    if n_echo_shifts < 1:
+        raise ValueError('Number of echo shifts have to be larger than 0.')
 
     # create PyPulseq Sequence object and set system limits
     seq = pp.Sequence(system=system)
@@ -195,6 +202,8 @@ def multi_echo_flash_kernel(
                 f'Delta TE must be larger than {min_delta_te * 1000:.3f} ms. Current value is {delta_te * 1000:.3f} ms.'
             )
 
+    te_shift = (delta_te if delta_te else min_delta_te) / n_echo_shifts
+
     # calculate minimum repetition time
     min_tr = (
         pp.calc_duration(gz)  # rf pulse
@@ -216,9 +225,10 @@ def multi_echo_flash_kernel(
                 f'TR must be larger than {current_min_tr * 1000:.3f} ms. Current value is {tr * 1000:.3f} ms.'
             )
 
-    print(f'\nCurrent echo time = {(min_te + te_delay) * 1000:.3f} ms')
-    print(f'\nCurrent delta echo time = {(delta_te if delta_te else min_delta_te) * 1000:.3f} ms')
-    print(f'Current repetition time = {(current_min_tr + tr_delay) * 1000:.3f} ms')
+    print(f'\nCurrent echo time = {(min_te + te_delay) * 1000:.3f} ms ')
+    print(f'Echoes are shifted by {[te_shift * n for n in range(n_echo_shifts)]} ms')
+    print(f'Current delta echo time = {(delta_te if delta_te else min_delta_te) * 1000:.3f} ms')
+    print(f'\nCurrent repetition time = {(current_min_tr + tr_delay) * 1000:.3f} ms')
 
     if ge_pislquant > 0:
         seq, _ = add_gre_receiver_gain_calibration(
@@ -233,10 +243,8 @@ def multi_echo_flash_kernel(
     rf_phase = 0.0
     rf_inc = 0.0
 
-    for rep in range(n_repetitions):
-        rep_label = pp.make_label(label='REP', type='SET', value=rep)
-        n_dummy = n_dummy_excitations if rep == 0 else 0
-        for pe in range(-n_dummy, n_phase_encoding):
+    for echo_shift_idx in range(n_echo_shifts):
+        for pe in range(-n_dummy_excitations, n_phase_encoding):
             # phase encoding along se and pe
             if pe >= 0:
                 gy_pre = pp.scale_grad(gy_pre_max, (pe - n_phase_encoding // 2) / (n_phase_encoding / 2))
@@ -251,20 +259,22 @@ def multi_echo_flash_kernel(
                 adc.phase_offset = rf_phase / 180 * np.pi
 
             # add slice selective excitation pulse
-            seq.add_block(rf, gz, pp.make_label(type='SET', label='TRID', value=88 if pe < 0 else 1))
+            seq.add_block(rf, gz, pp.make_label(type='SET', label='TRID', value=88 if pe < 0 else 1 + echo_shift_idx))
 
             # update rf phase offset for the next excitation pulse
             rf_inc = divmod(rf_inc + rf_spoiling_phase_increment, 360.0)[1]
             rf_phase = divmod(rf_phase + rf_inc, 360.0)[1]
 
             seq.add_block(gzr)
-            seq.add_block(pp.make_delay(te_delay))
+            seq.add_block(
+                pp.make_delay(round_to_raster(te_delay + te_shift * echo_shift_idx, system.block_duration_raster))
+            )
             seq.add_block(gx_pre, gy_pre)
 
             for echo in range(n_echoes):
-                echo_label = pp.make_label(label='ECO', type='SET', value=echo)
+                echo_label = pp.make_label(label='ECO', type='SET', value=echo + echo_shift_idx * n_echoes)
                 if pe >= 0:
-                    seq.add_block(gx, adc, pe_label, rep_label, echo_label)
+                    seq.add_block(gx, adc, pe_label, echo_label)
                 else:
                     seq.add_block(gx, pp.make_delay(pp.calc_duration(adc)))
                 if echo < n_echoes - 1:
@@ -293,7 +303,7 @@ def multi_echo_flash_kernel(
     seq.add_block(pp.make_label(label='NOISE', type='SET', value=False))
     seq.add_block(pp.make_delay(system.rf_dead_time))
 
-    return seq, min_te, min_tr, delta_te if delta_te else min_delta_te
+    return seq, min_te, min_tr, (delta_te if delta_te else min_delta_te), te_shift
 
 
 def main(
@@ -325,7 +335,7 @@ def main(
     te
         Desired echo time (TE) of first echo (in seconds). Minimum echo time is used if set to None.
     delta_te
-            Desired echo spacing (in seconds). Minimum echo spacing is used if set to None.
+        Desired echo spacing (in seconds). Minimum echo spacing is used if set to None.
     tr
         Desired repetition time (TR) (in seconds). Minimum repetition time is used if set to None.
     n_echoes
@@ -368,6 +378,7 @@ def main(
     rf_bwt = 4  # bandwidth-time product of rf excitation pulse [Hz*s]
     rf_apodization = 0.5  # apodization factor of rf excitation pulse
     readout_oversampling = 1
+    n_echo_shifts = 1
 
     # define ADC and gradient timing
     n_readout_with_oversampling = int(n_readout * readout_oversampling)
@@ -382,9 +393,10 @@ def main(
     gz_spoil_area = 4 / slice_thickness  # area / zeroth gradient moment of spoiler gradient
     rf_spoiling_phase_increment = 117  # RF spoiling phase increment [°]. Set to 0 for no RF spoiling.
 
-    seq, min_te, min_tr, delta_te = multi_echo_flash_kernel(
+    seq, min_te, min_tr, delta_te, te_shift = multi_echo_flash_kernel(
         system=system,
         te=te,
+        n_echo_shifts=n_echo_shifts,
         delta_te=delta_te,
         tr=tr,
         n_echoes=n_echoes,
@@ -394,7 +406,6 @@ def main(
         readout_oversampling=readout_oversampling,
         n_phase_encoding=n_phase_encoding,
         n_dummy_excitations=n_dummy_excitations,
-        n_repetitions=1,
         gx_pre_duration=gx_pre_duration,
         gx_flat_time=gx_flat_time,
         rf_duration=rf_duration,
@@ -407,6 +418,11 @@ def main(
         ge_segment_delay=0.0,
         ge_pislquant=0,
     )
+
+    # Calculate echo times
+    final_te = te or min_te
+    echo_times = np.asarray([final_te + idx * delta_te for idx in range(n_echoes)])  # one echo train
+    echo_times = [echo_times + idx * te_shift for idx in range(n_echo_shifts)]
 
     # check timing of the sequence
     if timing_check and not test_report:
@@ -428,7 +444,7 @@ def main(
     # write all required parameters in the seq-file header/definitions
     seq.set_definition('FOV', [fov_xy, fov_xy, slice_thickness])
     seq.set_definition('ReconMatrix', (n_readout, n_phase_encoding, 1))
-    seq.set_definition('TE', [(te or min_te) + idx * delta_te for idx in range(n_echoes)])
+    seq.set_definition('TE', echo_times)
     seq.set_definition('TR', tr or min_tr)
     seq.set_definition('ReadoutOversamplingFactor', readout_oversampling)
 

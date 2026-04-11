@@ -186,7 +186,7 @@ class DiffusionPrep:
                     )
                 )
                 if self._g_diff[-1].flat_time < 0:
-                    raise ValueError('Slew rate and duration to small for this b-value.')
+                    raise ValueError('Slew rate and duration too small for this b-value.')
 
         # Refousing pulse
         self._rf_ref, self._gz_ref, _ = pp.make_sinc_pulse(
