@@ -272,14 +272,16 @@ def adc_tse_propeller_kernel(
 
                     # add pre gradients and all labels
                     labels = [se_label, pe_label, dw_label]
-                    seq.add_block(*pp.rotate(gx_pre, gy_pre, angle=rotation_angle_rad, axis='z'), gz_pre)
+                    seq.add_block(*pp.rotate(gx_pre, gy_pre, angle=rotation_angle_rad, axis='z', system=system), gz_pre)
 
                     # readout gradient and adc
-                    seq.add_block(*pp.rotate(gx, angle=rotation_angle_rad, axis='z'), adc, *labels)
+                    seq.add_block(*pp.rotate(gx, angle=rotation_angle_rad, axis='z', system=system), adc, *labels)
 
                     # rewind gradients
                     seq.add_block(
-                        *pp.rotate(gx_post, pp.scale_grad(gy_pre, -1), angle=rotation_angle_rad, axis='z'),
+                        *pp.rotate(
+                            gx_post, pp.scale_grad(gy_pre, -1), angle=rotation_angle_rad, axis='z', system=system
+                        ),
                         pp.scale_grad(gz_pre, -1),
                     )
 

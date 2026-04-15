@@ -112,6 +112,7 @@ def t1_t2_spiral_cmrf_kernel(
         raise ValueError('Readout oversampling factor must be >= 1.')
 
     repetition_wait_time = 12
+    n_unique_spirals = 64
 
     # create PyPulseq Sequence object and set system limits
     seq = pp.Sequence(system=system)
@@ -163,7 +164,7 @@ def t1_t2_spiral_cmrf_kernel(
         fov_xy,
         spiral_undersampling,
         readout_oversampling,
-        n_spirals=None,
+        n_spirals=n_unique_spirals,
         max_pre_duration=0.0,
         spiral_type='out',
         g_rew_slew_rate_scaling=g_spiral_rew_slew_rate_scaling,
@@ -174,7 +175,7 @@ def t1_t2_spiral_cmrf_kernel(
 
     # create gradient spoiler
     gz_spoil_area = 4 / slice_thickness - gz_dummy.area / 2
-    gz_spoil = pp.make_trapezoid(channel='z', area=gz_spoil_area, system=system)
+    gz_spoil = pp.make_trapezoid(channel='z', area=gz_spoil_area, system=system, duration=1e-3)
 
     # calculate minimum echo time (TE) for sequence header
     min_te = pp.calc_duration(gz_dummy) / 2 + pp.calc_duration(gzr_dummy) + time_to_echo
@@ -370,7 +371,7 @@ def t1_t2_spiral_cmrf_kernel(
                 seq.add_block(
                     rf_n,
                     gz_n,
-                    pp.make_label(type='SET', label='TRID', value=int(1 + spiral_idx)),
+                    pp.make_label(type='SET', label='TRID', value=1),
                     pp.make_label(label='REP', type='SET', value=rep_),
                 )
 
@@ -378,9 +379,11 @@ def t1_t2_spiral_cmrf_kernel(
                 seq.add_block(gzr_n)
 
                 # add readout gradients and ADC
-                seq.add_block(gx[spiral_idx], gy[spiral_idx], adc, pp.make_delay(max_spiral_duration))
-
-                # add spoiler
+                rotation_angle = delta_array[spiral_idx]
+                seq.add_block(
+                    *pp.rotate(gx[0], gy[0], adc, angle=rotation_angle, axis='z', system=system),
+                    pp.make_delay(max_spiral_duration),
+                )
                 seq.add_block(gz_spoil)
 
                 # add TR delay and LIN/REP label
@@ -528,7 +531,7 @@ def main(
         spiral_undersampling=spiral_undersampling,
         slice_thickness=slice_thickness,
         spiral_sampling_period=None,
-        g_spiral_rew_slew_rate_scaling=1,
+        g_spiral_rew_slew_rate_scaling=0.5,
         rf_inv_duration=rf_inv_duration,
         rf_inv_spoil_risetime=rf_inv_spoil_risetime,
         rf_inv_spoil_flattime=rf_inv_spoil_flattime,

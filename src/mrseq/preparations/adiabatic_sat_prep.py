@@ -12,7 +12,7 @@ def add_adia_sat_block(
     system: pp.Opts | None = None,
     n_pulses: int = 3,
     max_b1: float = 20,
-) -> tuple[pp.Sequence, float]:
+) -> tuple[pp.Sequence, float, float]:
     """Add adiabatic saturation pulse train to a PyPulseq Sequence object.
 
     Parameters
@@ -41,6 +41,9 @@ def add_adia_sat_block(
     # create new sequence if not provided
     if seq is None:
         seq = pp.Sequence(system=system)
+
+    # get current duration of sequence before adding saturation block
+    time_start = sum(seq.block_durations.values())
 
     # spoilers
     spoil_amp0 = 0.8 * system.max_grad  # Hz/m
@@ -77,7 +80,10 @@ def add_adia_sat_block(
         else:
             seq.add_block(gx_spoil1, gy_spoil2, gz_spoil0)
 
-    return seq, spoil_dur
+    # calculate total duration of saturation block
+    block_duration = sum(seq.block_durations.values()) - time_start
+
+    return seq, spoil_dur, block_duration
 
 
 def add_sat_pulse_train(

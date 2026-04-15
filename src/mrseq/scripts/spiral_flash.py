@@ -7,6 +7,7 @@ import ismrmrd
 import numpy as np
 import pypulseq as pp
 
+from mrseq.preparations.receiver_gain_calibration import add_gre_receiver_gain_calibration
 from mrseq.utils import round_to_raster
 from mrseq.utils import spiral_acquisition
 from mrseq.utils import sys_defaults
@@ -25,7 +26,6 @@ def spiral_flash_kernel(
     n_readout: int,
     readout_oversampling: Literal[1, 2, 4],
     spiral_undersampling: float,
-    unique_spiral_arms: int,
     slice_thickness: float,
     n_slices: int,
     n_dummy_excitations: int,
@@ -194,9 +194,26 @@ def spiral_flash_kernel(
         prot = ismrmrd.Dataset(mrd_header_file, 'w')
         prot.write_xml_header(hdr.toXML('utf-8'))
 
+    ge_pislquant = 0
+    if ge_pislquant > 0:
+        n_readout_rx_gain = 128
+        seq, _ = add_gre_receiver_gain_calibration(
+            system=system,
+            seq=seq,
+            n_rep=ge_pislquant,
+            fov_z=slice_thickness,
+            n_readout=n_readout_rx_gain,
+        )
+        seq.add_block(pp.make_delay(1.0))
+
+        if mrd_header_file:
+            for _ in range(ge_pislquant):
+                acq = ismrmrd.Acquisition()
+                acq.resize(trajectory_dimensions=2, number_of_samples=n_readout_rx_gain)
+                prot.append_acquisition(acq)
+
     for slice_ in range(n_slices):
         for spiral_ in range(-n_dummy_excitations, len(gx)):
-            spiral_ = int(np.mod(spiral_, unique_spiral_arms))
             # calculate current phase_offset if rf_spoiling is activated
             if rf_spoiling_phase_increment > 0:
                 rf.phase_offset = rf_phase / 180 * np.pi
@@ -206,7 +223,7 @@ def spiral_flash_kernel(
             rf.freq_offset = gz.amplitude * slice_thickness * (slice_ - (n_slices - 1) / 2)
 
             # add slice selective excitation pulse
-            seq.add_block(rf, gz, pp.make_label(type='SET', label='TRID', value=int(1 + spiral_)))
+            seq.add_block(rf, gz, pp.make_label(type='SET', label='TRID', value=1))
             seq.add_block(gzr)
 
             # update rf phase offset for the next excitation pulse
@@ -220,7 +237,13 @@ def spiral_flash_kernel(
                 labels = []
                 labels.append(pp.make_label(label='LIN', type='SET', value=spiral_))
                 labels.append(pp.make_label(label='SLC', type='SET', value=slice_))
-                seq.add_block(gx[spiral_], gy[spiral_], adc, pp.make_delay(max_spiral_duration), *labels)
+
+                rotation_angle = spiral_ * 2 * np.pi / len(gx)
+                seq.add_block(
+                    *pp.rotate(gx[0], gy[0], adc, angle=rotation_angle, axis='z', system=system),
+                    pp.make_delay(max_spiral_duration),
+                    *labels,
+                )
             else:
                 seq.add_block(pp.make_delay(max_spiral_duration))
             seq.add_block(gz_spoil)
@@ -363,7 +386,7 @@ def main(
         n_slices=n_slices,
         n_dummy_excitations=n_dummy_excitations,
         spiral_sampling_period=None,
-        g_spiral_rew_slew_rate_scaling=1.0,
+        g_spiral_rew_slew_rate_scaling=0.5,
         gx_pre_duration=gx_pre_duration,
         rf_duration=rf_duration,
         rf_flip_angle=rf_flip_angle,

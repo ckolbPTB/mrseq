@@ -270,17 +270,17 @@ def t1_radial_look_locker_kernel(
             if te_delay > 0:
                 seq.add_block(gzr)
                 seq.add_block(pp.make_delay(te_delay))
-                seq.add_block(*pp.rotate(gx_pre, angle=rotation_angle_rad, axis='z'))
+                seq.add_block(*pp.rotate(gx_pre, angle=rotation_angle_rad, axis='z', system=system))
             else:
-                seq.add_block(*pp.rotate(gx_pre, gzr, angle=rotation_angle_rad, axis='z'))
+                seq.add_block(*pp.rotate(gx_pre, gzr, angle=rotation_angle_rad, axis='z', system=system))
 
             # rotate and add the readout gradient and ADC
             labels = []
             labels.append(pp.make_label(label='LIN', type='SET', value=spoke_))
             labels.append(pp.make_label(label='REP', type='SET', value=rep_))
-            seq.add_block(*pp.rotate(gx, adc, angle=rotation_angle_rad, axis='z'), *labels)
+            seq.add_block(*pp.rotate(gx, adc, angle=rotation_angle_rad, axis='z', system=system), *labels)
 
-            seq.add_block(*pp.rotate(gx_post, gz_spoil, angle=rotation_angle_rad, axis='z'))
+            seq.add_block(*pp.rotate(gx_post, gz_spoil, angle=rotation_angle_rad, axis='z', system=system))
 
             # add delay in case TR > min_TR
             if tr_delay > 0:

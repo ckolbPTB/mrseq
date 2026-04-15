@@ -301,7 +301,7 @@ def grpe_flash_dixon_kernel(
 
                 # calculate rotated phase encoding gradient
                 rotation_angle_rad = spoke_angle * se_index
-                gy_pre_rotated = rotate(gy_pre, angle=rotation_angle_rad, axis='x')
+                gy_pre_rotated = rotate(gy_pre, angle=rotation_angle_rad, axis='x', system=system)
                 gy_pre = gy_pre_rotated[0]
                 if len(gy_pre_rotated) == 2:
                     gz_pre = gy_pre_rotated[1]

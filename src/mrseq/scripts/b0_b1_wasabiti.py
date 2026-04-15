@@ -209,7 +209,7 @@ def wasabiti_gre_centric_kernel(
         rep_label = pp.make_label(type='SET', label='REP', value=int(rep_idx))
 
         # add adiabatic saturation pulse train and recovery time
-        seq, last_spoil_dur = add_adia_sat_block(seq=seq, system=system, max_b1=sat_pulse_max_b1)
+        seq, last_spoil_dur, _ = add_adia_sat_block(seq=seq, system=system, max_b1=sat_pulse_max_b1)
         seq.add_block(
             pp.make_delay(
                 round_to_raster(t_recovery[rep_idx] - last_spoil_dur, raster_time=system.block_duration_raster)

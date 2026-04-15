@@ -421,8 +421,8 @@ def main(
 
     # Calculate echo times
     final_te = te or min_te
-    echo_times = np.asarray([final_te + idx * delta_te for idx in range(n_echoes)])  # one echo train
-    echo_times = [echo_times + idx * te_shift for idx in range(n_echo_shifts)]
+    echo_times_array = np.asarray([final_te + idx * delta_te for idx in range(n_echoes)])  # one echo train
+    echo_times = [echo_times_array + idx * te_shift for idx in range(n_echo_shifts)]
 
     # check timing of the sequence
     if timing_check and not test_report:
