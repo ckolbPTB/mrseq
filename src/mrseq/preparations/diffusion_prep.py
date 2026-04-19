@@ -267,7 +267,7 @@ class DiffusionPrep:
             seq.add_block(*g_current_diff)
             seq.add_block(pp.make_delay(self._time_between_diff_and_rf))
 
-            b_value = calculate_b_value(
+            b_value_calculated = calculate_b_value(
                 g_current_diff[0].amplitude * np.sqrt(len(g_current_diff)),
                 self._g_duration,
                 g_current_diff[0].rise_time,
@@ -276,6 +276,13 @@ class DiffusionPrep:
         else:
             seq.add_block(pp.make_delay(self._delay_before_crush))
             seq.add_block(self._g_crush)
+
+            b_value_calculated = calculate_b_value(
+                self._g_crush.amplitude,
+                pp.calc_duration(self._g_crush),
+                self._g_crush.rise_time,
+                pp.calc_duration(self._g_crush) + pp.calc_duration(self._rf_ref, self._gz_ref),
+            )
 
         # Add refocusing pulse
         seq.add_block(self._rf_ref, self._gz_ref)
@@ -286,4 +293,4 @@ class DiffusionPrep:
             seq.add_block(self._g_crush)
             seq.add_block(pp.make_delay(self._delay_after_crush))
 
-        return seq, b_value
+        return seq, b_value_calculated

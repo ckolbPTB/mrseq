@@ -429,7 +429,7 @@ def adc_epi2d_se_kernel(
     seq.set_definition('TR', tr or float(min_tr))
     seq.set_definition('ReadoutOversamplingFactor', readout_oversampling)
     seq.set_definition('b-values', [int(b) for b in b_values_calculated])
-
+    print(b_values_calculated)
     return seq, float(min_te), float(min_tr)
 
 
