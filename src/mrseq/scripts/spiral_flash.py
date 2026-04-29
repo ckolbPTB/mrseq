@@ -7,6 +7,8 @@ import ismrmrd
 import numpy as np
 import pypulseq as pp
 
+from mrseq.preparations import add_t1_inv_prep
+from mrseq.preparations import add_t2_prep
 from mrseq.preparations.receiver_gain_calibration import add_gre_receiver_gain_calibration
 from mrseq.utils import round_to_raster
 from mrseq.utils import spiral_acquisition
@@ -16,6 +18,19 @@ from mrseq.utils.ismrmrd import Fov
 from mrseq.utils.ismrmrd import Limits
 from mrseq.utils.ismrmrd import MatrixSize
 from mrseq.utils.ismrmrd import create_header
+
+
+def _rotation_matrix(theta):
+    # R[0] = (R[0][0], R[0][1], R[0][2])
+    R0 = np.stack((np.cos(theta), -np.sin(theta), np.zeros_like(theta)), axis=1)  # (nangles, 3)
+
+    # R[1] = (R[1][0], R[1][1], R[1][2])
+    R1 = np.stack((np.sin(theta), np.cos(theta), np.zeros_like(theta)), axis=1)  # (nangles, 3)
+
+    # R[2] = (R[2][0], R[2][1], R[2][2])
+    R2 = np.stack((np.zeros_like(theta), np.zeros_like(theta), np.ones_like(theta)), axis=1)  # (nangles, 3)
+
+    return np.stack((R0, R1, R2), axis=1)  # (nangles, 3, 3)
 
 
 def spiral_flash_kernel(
@@ -39,6 +54,7 @@ def spiral_flash_kernel(
     rf_spoiling_phase_increment: float,
     gz_spoil_duration: float,
     gz_spoil_area: float,
+    use_ext_rot: bool,
     mrd_header_file: str | Path | None,
 ) -> tuple[pp.Sequence, float, float]:
     """Generate a spiral FLASH sequence.
@@ -98,15 +114,42 @@ def spiral_flash_kernel(
         Shortest possible repetition time.
 
     """
+    min_cardiac_trigger_delay = 0.12
+    ge_segment_delay = 117e-6
+
     if n_dummy_excitations < 0:
         raise ValueError('Number of dummy excitations must be >= 0.')
 
     # create PyPulseq Sequence object and set system limits
     seq = pp.Sequence(system=system)
 
-    # create slice selective excitation pulse and gradients
-    rf, gz, gzr = pp.make_sinc_pulse(
-        flip_angle=rf_flip_angle / 180 * np.pi,
+    # cMRF specific settings
+    n_blocks = 15  # number of heartbeat blocks
+    minimum_time_to_set_label = round_to_raster(
+        1e-5, system.block_duration_raster
+    )  # minimum time to set a label (in seconds)
+
+    # create flip angle pattern
+    max_flip_angles_deg = [12.5, 18.75, 25, 25, 25, 12.5, 18.75, 25, 25.0, 25, 12.5, 18.75, 25, 25, 25]
+    flip_angles = np.deg2rad(
+        np.concatenate(
+            [
+                np.concatenate((np.linspace(4, max_angle, 16), np.full((31,), max_angle)))
+                for max_angle in max_flip_angles_deg
+            ]
+        )
+    )
+
+    # make sure the number of blocks fits the total number of flip angles / repetitions
+    if not flip_angles.size % n_blocks == 0:
+        raise ValueError('Number of repetitions must be a multiple of the number of blocks.')
+
+    # calculate number of shots / repetitions per block
+    n_shots_per_block = flip_angles.size // n_blocks
+
+    # create rf dummy pulse (required for some timing calculations)
+    rf_max_fa, gz_max_fa, gzr_max_fa = pp.make_sinc_pulse(
+        flip_angle=np.max(flip_angles),
         duration=rf_duration,
         slice_thickness=slice_thickness,
         apodization=rf_apodization,
@@ -130,15 +173,17 @@ def spiral_flash_kernel(
         sampling_period=spiral_sampling_period,
         g_rew_slew_rate_scaling=g_spiral_rew_slew_rate_scaling,
     )
+    delta_array = 2 * np.pi / len(gx) * np.arange(len(gx))  # angle difference between subsequent spirals
     max_spiral_duration = max(pp.calc_duration(gx, gy) for gx, gy in zip(gx, gy, strict=True))
+    max_spiral_duration = pp.calc_duration(gx[0], gy[0])
 
     # create spoiler gradients
     gz_spoil = pp.make_trapezoid(channel='z', system=system, area=gz_spoil_area, duration=gz_spoil_duration)
 
     min_te = (
-        rf.shape_dur / 2  # time from center to end of RF pulse
-        + max(rf.ringdown_time, gz.fall_time)  # RF ringdown time or gradient fall time
-        + pp.calc_duration(gzr)  # slice rewinder
+        rf_max_fa.shape_dur / 2  # time from center to end of RF pulse
+        + max(rf_max_fa.ringdown_time, gz_max_fa.fall_time)  # RF ringdown time or gradient fall time
+        + pp.calc_duration(gzr_max_fa)  # slice rewinder
         + time_to_echo
     )
 
@@ -152,8 +197,8 @@ def spiral_flash_kernel(
 
     # calculate minimum repetition time
     min_tr = (
-        pp.calc_duration(gz)  # rf pulse
-        + pp.calc_duration(gzr)  # slice rewinder
+        pp.calc_duration(gz_max_fa)  # rf pulse
+        + pp.calc_duration(gzr_max_fa)  # slice rewinder
         + max_spiral_duration  # readout gradient
         + pp.calc_duration(gz_spoil)  # gradient spoiler or readout-re-winder
     )
@@ -171,10 +216,6 @@ def spiral_flash_kernel(
 
     print(f'\nCurrent echo time = {(min_te + te_delay) * 1000:.3f} ms')
     print(f'Current repetition time = {(current_min_tr + tr_delay) * 1000:.3f} ms')
-
-    # choose initial rf phase offset
-    rf_phase = 0.0
-    rf_inc = 0.0
 
     # create header
     if mrd_header_file:
@@ -212,58 +253,160 @@ def spiral_flash_kernel(
                 acq.resize(trajectory_dimensions=2, number_of_samples=n_readout_rx_gain)
                 prot.append_acquisition(acq)
 
-    for slice_ in range(n_slices):
-        for spiral_ in range(-n_dummy_excitations, len(gx)):
-            # calculate current phase_offset if rf_spoiling is activated
-            if rf_spoiling_phase_increment > 0:
-                rf.phase_offset = rf_phase / 180 * np.pi
-                adc.phase_offset = rf_phase / 180 * np.pi
+    t2_prep_echo_times = np.array([0.03, 0.05, 0.1])  # [s]
 
-            # set frequency offset for current slice
-            rf.freq_offset = gz.amplitude * slice_thickness * (slice_ - (n_slices - 1) / 2)
+    # define T1prep settings
+    rf_inv_duration = 12e-3  # duration of adiabatic inversion pulse [s]
+    rf_inv_spoil_risetime = 0.6e-3  # rise time of spoiler after inversion pulse [s]
+    rf_inv_spoil_flattime = 8.4e-3  # flat time of spoiler after inversion pulse [s]
+    rf_inv_mu = 4.1  # constant determining amplitude of frequency sweep of adiabatic inversion pulse
 
-            # add slice selective excitation pulse
-            seq.add_block(rf, gz, pp.make_label(type='SET', label='TRID', value=1))
-            seq.add_block(gzr)
+    # get prep block duration and calculate corresponding trigger delay
+    t1prep_block, t1prep_dur, time_since_inversion = add_t1_inv_prep(
+        rf_duration=rf_inv_duration,
+        spoiler_ramp_time=rf_inv_spoil_risetime,
+        spoiler_flat_time=rf_inv_spoil_flattime,
+        rf_mu=rf_inv_mu,
+        system=system,
+    )
 
-            # update rf phase offset for the next excitation pulse
-            rf_inc = divmod(rf_inc + rf_spoiling_phase_increment, 360.0)[1]
-            rf_phase = divmod(rf_phase + rf_inc, 360.0)[1]
+    rot_matrix = _rotation_matrix(delta_array)
 
-            if te_delay > 0:
-                seq.add_block(pp.make_delay(te_delay))
+    n_repetitions = 1
+    repetition_wait_time = 12
+    for rep_ in range(n_repetitions):
+        rf_max_fa_signal = rf_max_fa.signal.copy()
+        for slice_ in range(n_slices):
+            # initialize spoke counter
+            spoke_counter = 0
 
-            if spiral_ >= 0:
-                labels = []
-                labels.append(pp.make_label(label='LIN', type='SET', value=spiral_))
-                labels.append(pp.make_label(label='SLC', type='SET', value=slice_))
+            # loop over all blocks
+            for block in range(n_blocks):
+                if block % 5 == 0:
+                    constant_trig_delay = (
+                        min_cardiac_trigger_delay - t1prep_dur - ge_segment_delay
+                    )  # delay after inversion segment
 
-                rotation_angle = spiral_ * 2 * np.pi / len(gx)
-                seq.add_block(
-                    *pp.rotate(gx[0], gy[0], adc, angle=rotation_angle, axis='z', system=system),
-                    pp.make_delay(max_spiral_duration),
-                    *labels,
-                )
-            else:
-                seq.add_block(pp.make_delay(max_spiral_duration))
-            seq.add_block(gz_spoil)
+                    # add trigger and constant part of trigger delay
+                    seq.add_block(
+                        pp.make_trigger(
+                            channel='physio1',
+                            duration=round_to_raster(
+                                constant_trig_delay - ge_segment_delay, raster_time=system.block_duration_raster
+                            ),
+                        ),
+                        pp.make_label(type='SET', label='TRID', value=1044),
+                    )
 
-            # add delay in case TR > min_TR
-            if tr_delay > 0:
-                seq.add_block(pp.make_delay(tr_delay))
+                    # add all events of T1prep block
+                    for idx in t1prep_block.block_events:
+                        seq.add_block(t1prep_block.get_block(idx))
 
-            if mrd_header_file and spiral_ >= 0:
-                # add acquisitions to metadata
-                spiral_trajectory = np.zeros((trajectory.shape[1], 2), dtype=np.float32)
+                # add no preparation for every block following an inversion block
+                elif block % 5 == 1:
+                    # add trigger and trigger delay(s)
+                    seq.add_block(
+                        pp.make_trigger(
+                            channel='physio1',
+                            duration=round_to_raster(
+                                min_cardiac_trigger_delay - ge_segment_delay, raster_time=system.block_duration_raster
+                            ),
+                        ),
+                        pp.make_label(type='SET', label='TRID', value=1048),
+                    )
 
-                # the spiral trajectory is calculated in units of delta_k. for image reconstruction we use delta_k = 1
-                spiral_trajectory[:, 0] = trajectory[spiral_, :, 0] * fov_xy
-                spiral_trajectory[:, 1] = trajectory[spiral_, :, 1] * fov_xy
+                # add T2prep for every other block
+                else:
+                    # get prep block duration and calculate corresponding trigger delay
+                    echo_idx = block % 5 - 2
+                    echo_time = t2_prep_echo_times[echo_idx]
+                    t2prep_block, prep_dur = add_t2_prep(echo_time=echo_time, system=system)
+                    constant_trig_delay = min_cardiac_trigger_delay - prep_dur
 
-                acq = ismrmrd.Acquisition()
-                acq.resize(trajectory_dimensions=2, number_of_samples=adc.num_samples)
-                acq.traj[:] = spiral_trajectory
-                prot.append_acquisition(acq)
+                    # add trigger and constant part of trigger delay
+                    seq.add_block(
+                        pp.make_trigger(
+                            channel='physio1',
+                            duration=round_to_raster(
+                                constant_trig_delay - ge_segment_delay, raster_time=system.block_duration_raster
+                            ),
+                        ),
+                        pp.make_label(type='SET', label='TRID', value=int(1045 + echo_idx)),
+                    )
+
+                    for idx in t2prep_block.block_events:
+                        seq.add_block(t2prep_block.get_block(idx))
+
+                # loop over shots / repetitions per block
+                for _ in range(n_shots_per_block):
+                    # calculate theoretical golden angle rotation for current shot
+                    golden_angle = (
+                        (rep_ * flip_angles.size + spoke_counter) * 2 * np.pi * (1 - 2 / (1 + np.sqrt(5)))
+                    ) % (2 * np.pi)
+
+                    # find closest unique spiral to current golden angle rotation
+                    diff = np.abs(delta_array - golden_angle)
+                    spiral_idx = np.argmin(diff)
+
+                    # scale rf signal to current flip angle
+                    rf_max_fa.signal = rf_max_fa_signal * flip_angles[spoke_counter] / np.max(flip_angles)
+
+                    # add slice selective excitation pulse
+                    seq.add_block(
+                        rf_max_fa,
+                        gz_max_fa,
+                        pp.make_label(type='SET', label='TRID', value=1),
+                        pp.make_label(label='REP', type='SET', value=rep_),
+                        pp.make_label(label='LIN', type='SET', value=spoke_counter),
+                        pp.make_label(label='SLC', type='SET', value=slice_),
+                    )
+                    seq.add_block(gzr_max_fa)
+
+                    if te_delay > 0:
+                        seq.add_block(pp.make_delay(te_delay))
+
+                    if use_ext_rot:
+                        # Create rotation event
+                        rot = pp.make_rotation(rot_matrix[spiral_idx])
+
+                        # Read-prewinding and phase encoding gradients
+                        seq.add_block(gx[0], gy[0], adc, rot)
+                    else:
+                        rotation_angle = delta_array[spiral_idx]
+                        seq.add_block(
+                            *pp.rotate(gx[0], gy[0], adc, angle=rotation_angle, axis='z', system=system),
+                        )
+
+                    seq.add_block(gz_spoil)
+
+                    # add delay in case TR > min_TR
+                    if tr_delay > 0:
+                        seq.add_block(pp.make_delay(tr_delay))
+
+                    # increment spoke counter
+                    spoke_counter += 1
+
+                    if mrd_header_file:
+                        # add acquisitions to metadata
+                        spiral_trajectory = np.zeros((trajectory.shape[1], 2), dtype=np.float32)
+
+                        # the spiral trajectory is calculated in units of delta_k. for image reconstruction we use delta_k = 1
+                        spiral_trajectory[:, 0] = trajectory[spiral_idx, :, 0] * fov_xy
+                        spiral_trajectory[:, 1] = trajectory[spiral_idx, :, 1] * fov_xy
+
+                        acq = ismrmrd.Acquisition()
+                        acq.resize(trajectory_dimensions=2, number_of_samples=adc.num_samples)
+                        acq.traj[:] = spiral_trajectory
+                        prot.append_acquisition(acq)
+
+        # add delay between repetitions
+        if rep_ < n_repetitions - 1:
+            seq.add_block(
+                pp.make_delay(
+                    round_to_raster(repetition_wait_time - ge_segment_delay, raster_time=system.block_duration_raster)
+                ),
+                pp.make_label(type='SET', label='TRID', value=2088),
+            )
 
     # obtain noise samples
     seq.add_block(

@@ -420,7 +420,7 @@ def t1_molli_bssfp_kernel(
 
         # add three cardiac cycles for signal recovery
         if part_idx == 0:
-            for _cardiac_index in range(3):
+            for _cardiac_index in range(4):
                 # add trigger and constant part of trigger delay
                 seq.add_block(
                     pp.make_trigger(

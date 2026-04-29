@@ -145,8 +145,8 @@ def t1_t2_spiral_cmrf_kernel(
     n_shots_per_block = flip_angles.size // n_blocks
 
     # create rf dummy pulse (required for some timing calculations)
-    rf_dummy, gz_dummy, gzr_dummy = pp.make_sinc_pulse(
-        flip_angle=np.pi,
+    rf_max_fa, gz_max_fa, gzr_max_fa = pp.make_sinc_pulse(
+        flip_angle=np.max(flip_angles),
         duration=rf_duration,
         slice_thickness=slice_thickness,
         apodization=rf_apodization,
@@ -174,17 +174,17 @@ def t1_t2_spiral_cmrf_kernel(
     max_spiral_duration = max(pp.calc_duration(gx, gy) for gx, gy in zip(gx, gy, strict=True))
 
     # create gradient spoiler
-    gz_spoil_area = 4 / slice_thickness - gz_dummy.area / 2
+    gz_spoil_area = 4 / slice_thickness - gz_max_fa.area / 2
     gz_spoil = pp.make_trapezoid(channel='z', area=gz_spoil_area, system=system, duration=1e-3)
 
     # calculate minimum echo time (TE) for sequence header
-    min_te = pp.calc_duration(gz_dummy) / 2 + pp.calc_duration(gzr_dummy) + time_to_echo
+    min_te = pp.calc_duration(gz_max_fa) / 2 + pp.calc_duration(gzr_max_fa) + time_to_echo
     min_te = round_to_raster(min_te, system.block_duration_raster)
 
     # calculate minimum repetition time (TR)
     min_tr = (
-        pp.calc_duration(rf_dummy, gz_dummy)  # rf pulse
-        + pp.calc_duration(gzr_dummy)  # slice selection re-phasing gradient
+        pp.calc_duration(rf_max_fa, gz_max_fa)  # rf pulse
+        + pp.calc_duration(gzr_max_fa)  # slice selection re-phasing gradient
         + max_spiral_duration  # readout
         + pp.calc_duration(gz_spoil)  # gz_spoil durations
         + minimum_time_to_set_label  # min time to set labels
@@ -251,6 +251,7 @@ def t1_t2_spiral_cmrf_kernel(
             acq.resize(trajectory_dimensions=2, number_of_samples=n_readout_rx_gain)
             prot.append_acquisition(acq)
 
+    rf_max_fa_signal = rf_max_fa.signal.copy()
     for rep_ in range(n_repetitions):
         # initialize LIN label
         seq.add_block(
@@ -342,9 +343,6 @@ def t1_t2_spiral_cmrf_kernel(
 
             # loop over shots / repetitions per block
             for _ in range(n_shots_per_block):
-                # get current flip angle
-                fa = flip_angles[spoke_counter]
-
                 # calculate theoretical golden angle rotation for current shot
                 golden_angle = ((rep_ * flip_angles.size + spoke_counter) * 2 * np.pi * (1 - 2 / (1 + np.sqrt(5)))) % (
                     2 * np.pi
@@ -354,29 +352,19 @@ def t1_t2_spiral_cmrf_kernel(
                 diff = np.abs(delta_array - golden_angle)
                 spiral_idx = np.argmin(diff)
 
-                # create slice selective rf pulse for current shot
-                rf_n, gz_n, gzr_n = pp.make_sinc_pulse(
-                    flip_angle=fa,
-                    duration=rf_duration,
-                    slice_thickness=slice_thickness,
-                    apodization=rf_apodization,
-                    time_bw_product=rf_bwt,
-                    delay=system.rf_dead_time,
-                    system=system,
-                    return_gz=True,
-                    use='excitation',
-                )
+                # scale rf signal to current flip angle
+                rf_max_fa.signal = rf_max_fa_signal * flip_angles[spoke_counter] / np.max(flip_angles)
 
                 # add slice selective excitation pulse
                 seq.add_block(
-                    rf_n,
-                    gz_n,
+                    rf_max_fa,
+                    gz_max_fa,
                     pp.make_label(type='SET', label='TRID', value=1),
                     pp.make_label(label='REP', type='SET', value=rep_),
                 )
 
                 # add slice selection re-phasing gradient
-                seq.add_block(gzr_n)
+                seq.add_block(gzr_max_fa)
 
                 # add readout gradients and ADC
                 rotation_angle = delta_array[spiral_idx]
@@ -402,7 +390,7 @@ def t1_t2_spiral_cmrf_kernel(
                     acq.traj[:] = spiral_trajectory
                     prot.append_acquisition(acq)
 
-                # increment repetition counter
+                # increment spoke counter
                 spoke_counter += 1
 
         # add delay between repetitions
