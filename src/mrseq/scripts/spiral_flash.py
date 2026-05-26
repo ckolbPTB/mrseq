@@ -272,7 +272,7 @@ def spiral_flash_kernel(
 
     rot_matrix = _rotation_matrix(delta_array)
 
-    n_repetitions = 1
+    n_repetitions = 4
     repetition_wait_time = 12
     for rep_ in range(n_repetitions):
         rf_max_fa_signal = rf_max_fa.signal.copy()
