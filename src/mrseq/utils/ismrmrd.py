@@ -137,7 +137,7 @@ def create_header(
     # user parameters
     dtime = ismrmrd.xsd.userParameterDoubleType()
     dtime.name = 'dwellTime_us'
-    dtime.value_ = dwell_time * 1e6
+    dtime.value = float(dwell_time * 1e6)
     hdr.userParameters = ismrmrd.xsd.userParametersType()
     hdr.userParameters.userParameterDouble.append(dtime)
 
@@ -393,7 +393,7 @@ def ismrmrd_from_sequence(
         recon_fov=Fov(*sequence.get_definition('FOV').tolist()),
         encoding_matrix=MatrixSize(n_x=n_readout, n_y=n_phase_encoding, n_z=n_slice_encoding),
         recon_matrix=MatrixSize(n_x=int(recon_matrix[0]), n_y=int(recon_matrix[1]), n_z=int(recon_matrix[2])),
-        dwell_time=adc_blocks[0].dwell,
+        dwell_time=float(adc_blocks[0].dwell),
         k1_limits=Limits.from_label_list(adc_labels.get('LIN', (0,))),
         k2_limits=Limits.from_label_list(adc_labels.get('PAR', (0,))),
         slice_limits=Limits.from_label_list(adc_labels.get('SLC', (0,))),
