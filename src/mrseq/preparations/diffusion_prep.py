@@ -11,7 +11,7 @@ from mrseq.utils import sys_defaults
 
 def calculate_b_value(
     g_amplitude: float,
-    g_duration: float,
+    g_total_duration: float,
     g_rise_time: float,
     g_delta_time: float,
 ) -> float:
@@ -25,8 +25,8 @@ def calculate_b_value(
     ----------
     g_amplitude
         Gradient amplitude for diffusion weighting in Hz/m.
-    g_duration
-        Gradient duration for diffusion weighting in seconds.
+    g_total_duration
+        Total duration of the diffusion gradient in seconds.
     g_rise_time
         Gradient rise time for diffusion weighting in seconds.
     g_delta_time
@@ -37,6 +37,8 @@ def calculate_b_value(
     b_value
         The calculated b-value in s/mm^2.
     """
+    # The correction equation assumes that the duration is from the beginning of the ramp up to the end of the platue.
+    g_duration = g_total_duration - g_rise_time
     b_value = (
         (2 * np.pi) ** 2
         * g_amplitude**2
@@ -214,7 +216,7 @@ class DiffusionPrep:
         )
 
         # Calculate timings
-        self.g_delta_time_ = g_delta_time
+        self._g_delta_time = g_delta_time
         min_g_delta_time = pp.calc_duration(*self._g_diff) + pp.calc_duration(self._rf_ref, self._gz_ref)
         if min_g_delta_time > g_delta_time:
             raise ValueError('Time between diffusion gradients is too short to fit in refocusing pulse.')
@@ -271,7 +273,7 @@ class DiffusionPrep:
                 g_current_diff[0].amplitude * np.sqrt(len(g_current_diff)),
                 self._g_duration,
                 g_current_diff[0].rise_time,
-                self.g_delta_time_,
+                self._g_delta_time,
             )
         else:
             seq.add_block(pp.make_delay(self._delay_before_crush))
