@@ -42,7 +42,7 @@ dependencies = [
     "numpy>=1.23,<3.0",
     "matplotlib<4.0",
     "pypulseq>=1.4.1",
-    "ismrmrd>=1.14.1",
+    "ismrmrd==1.14.2",
 ]
 
 [project.optional-dependencies]
@@ -54,7 +54,7 @@ tests = [
     "pytest-cov",
     "pytest-xdist",
 ]
-examples = ["mrzerocore>=0.4.3", "mrpro", "cmap", "jupyter-book<2.0"]
+examples = ["mrzerocore>=1.0.3", "mrpro", "cmap", "jupyter-book<2.0"]
 dev = ["mrseq[tests, examples]"]
 
 [project.urls]
