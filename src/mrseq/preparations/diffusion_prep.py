@@ -21,6 +21,8 @@ def calculate_b_value(
     Calculate the b-value for diffusion-weighted imaging using two
     diffusion gradients (trapezoidal) separated by refocusing pulses.
 
+    A correction for symmetric trapezoidal diffusion gradients is applied according to [MAT1990]_.
+
     Parameters
     ----------
     g_amplitude
@@ -36,6 +38,11 @@ def calculate_b_value(
     -------
     b_value
         The calculated b-value in s/mm^2.
+
+    References
+    ----------
+    .. [MAT1990] Mattiello J, Basser PJ, Lebihan D (1990) Analytical Expressions for the b Matrix in NMR Diffusion
+              Imaging and Spectroscopy. JMR 108(2). https://doi.org/10.1006/jmra.1994.1103
     """
     # The correction equation assumes that the duration is from the beginning of the ramp up to the end of the platue.
     g_duration = g_total_duration - g_rise_time
