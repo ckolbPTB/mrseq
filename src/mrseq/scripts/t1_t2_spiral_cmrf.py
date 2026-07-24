@@ -339,7 +339,7 @@ def main(
     t2_prep_echo_times: np.ndarray | None = None,
     tr: float = 10e-3,
     fov_xy: float = 128e-3,
-    spiral_undersampling: int = 4,
+    spiral_undersampling: int = 2,
     n_readout: int = 128,
     slice_thickness: float = 8e-3,
     show_plots: bool = True,

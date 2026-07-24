@@ -7,7 +7,7 @@ from mrseq.utils.system_defaults import sys_a
 from mrseq.utils.system_defaults import sys_b
 from mrseq.utils.system_defaults import sys_c
 
-EXPECTED_DUR = 11.00523  # defined 2026-02-10
+EXPECTED_DUR = 11.11515  # defined 2026-07-24
 
 
 def test_default_seq_duration(system_defaults):

@@ -378,7 +378,7 @@ def main(
         inversion_times = np.asarray([0.1, 0.18])
 
     # define settings of rf excitation pulse
-    rf_duration = 0.6e-3  # duration of the rf excitation pulse [s]
+    rf_duration = 0.64e-3  # duration of the rf excitation pulse [s]
     rf_flip_angle = 35  # flip angle of rf excitation pulse [°]
     rf_bwt = 1.5  # bandwidth-time product of rf excitation pulse [Hz*s]
     rf_apodization = 0.5  # apodization factor of rf excitation pulse
@@ -389,7 +389,7 @@ def main(
     adc_dwell_time = round_to_raster(
         1.0 / (receiver_bandwidth_per_pixel * n_readout_with_oversampling), system.adc_raster_time
     )
-    gx_pre_duration = 0.72e-3  # duration of readout pre-winder gradient [s]
+    gx_pre_duration = 0.8e-3  # duration of readout pre-winder gradient [s]
     gx_flat_time, adc_dwell_time = find_gx_flat_time_on_adc_raster(
         n_readout_with_oversampling, adc_dwell_time, system.grad_raster_time, system.adc_raster_time
     )

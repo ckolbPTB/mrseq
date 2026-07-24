@@ -272,8 +272,8 @@ def add_t2_prep(
         gz_spoil = pp.make_trapezoid(
             channel='z',
             amplitude=0.4 * system.max_grad,
-            flat_time=spoiler_flat_time,
-            rise_time=spoiler_ramp_time,
+            flat_time=round_to_raster(spoiler_flat_time, system.grad_raster_time),
+            rise_time=round_to_raster(spoiler_ramp_time, system.grad_raster_time),
             system=system,
         )
         seq.add_block(gz_spoil)

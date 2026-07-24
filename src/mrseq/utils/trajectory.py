@@ -187,7 +187,7 @@ class MultiEchoAcquisition:
         self._gx_pre = pp.make_trapezoid(
             channel='x',
             area=-(self._gx.amplitude * self._gx.rise_time / 2 + delta_k * (self._n_readout_pre_echo + 0.5)),
-            duration=gx_pre_duration * partial_echo_factor,
+            duration=round_to_raster(gx_pre_duration * partial_echo_factor, self._system.grad_raster_time),
             system=self._system,
         )
         self._gx_post = pp.make_trapezoid(

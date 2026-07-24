@@ -503,16 +503,17 @@ def main(
         system = sys_defaults
 
     # define settings of rf excitation pulse
-    rf_duration = 0.6e-3  # duration of the rf excitation pulse [s]
+    rf_duration = 0.64e-3  # duration of the rf excitation pulse [s]
     rf_bwt = 2  # bandwidth-time product of rf excitation pulse [Hz*s]
     rf_apodization = 0.5  # apodization factor of rf excitation pulse
     readout_oversampling = 2  # readout oversampling factor, commonly 2. This reduces aliasing artifacts.
 
-    # this is just approximately, the final calculation is done in the kernel
+    # the number of readout samples should always be even
     n_readout_with_oversampling = int(n_readout * readout_oversampling * partial_echo_factor)
+    n_readout_with_oversampling += np.mod(n_readout_with_oversampling, 2)
     # define ADC and gradient timing
     adc_dwell_time = 1.0 / (receiver_bandwidth_per_pixel * n_readout_with_oversampling)
-    gx_pre_duration = round_to_raster(1.2e-3, system.grad_raster_time)  # duration of readout pre-winder gradient [s]
+    gx_pre_duration = 1.12e-3  # duration of readout pre-winder gradient [s]
     gx_flat_time, adc_dwell_time = find_gx_flat_time_on_adc_raster(
         n_readout_with_oversampling, adc_dwell_time, system.grad_raster_time, system.adc_raster_time
     )
@@ -522,7 +523,7 @@ def main(
     n_echoes = 3
 
     # define spoiling
-    gx_spoil_duration = round_to_raster(2.0e-3, system.grad_raster_time)  # duration of spoiler gradient [s]
+    gx_spoil_duration = 2.08e-3  # duration of spoiler gradient [s]
     gx_spoil_area = readout_oversampling * n_readout * 1 / fov_x  # area / zeroth gradient moment of spoiler gradient
     rf_spoiling_phase_increment = 117  # RF spoiling phase increment [°]. Set to 0 for no RF spoiling.
 

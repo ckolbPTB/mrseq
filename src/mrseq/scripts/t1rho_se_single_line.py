@@ -322,7 +322,7 @@ def main(
 
     # define ADC and gradient timing
     adc_dwell = system.grad_raster_time
-    gx_pre_duration = 1.0e-3  # duration of readout pre-winder gradient [s]
+    gx_pre_duration = 1.12e-3  # duration of readout pre-winder gradient [s]
     gx_flat_time = n_readout * adc_dwell  # flat time of readout gradient [s]
 
     # define settings of rf excitation pulse

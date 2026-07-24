@@ -199,7 +199,7 @@ def make_trapezoid_readout(
         flat_area=flat_area,
         flat_time=flat_time,
         max_grad=max_grad,
-        max_sleqw=max_slew,
+        max_slew=max_slew,
         rise_time=rise_time,
         system=system,
     )
@@ -215,7 +215,7 @@ def make_trapezoid_readout(
             flat_area=flat_area,
             flat_time=flat_time,
             max_grad=max_grad,
-            max_sleqw=max_slew,
+            max_slew=max_slew,
             system=system,
             rise_time=system.adc_dead_time,
         )

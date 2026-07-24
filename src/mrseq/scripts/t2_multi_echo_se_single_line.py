@@ -269,7 +269,7 @@ def main(
 
     # define ADC and gradient timing
     adc_dwell = 20e-6  # 10 µs results in 100 kHz bandwidth
-    gx_pre_duration = 1.0e-3  # duration of readout pre-winder gradient [s]
+    gx_pre_duration = 1.12e-3  # duration of readout pre-winder gradient [s]
     gx_flat_time = n_readout * adc_dwell  # flat time of readout gradient [s]
 
     # define spoiler gradient settings
