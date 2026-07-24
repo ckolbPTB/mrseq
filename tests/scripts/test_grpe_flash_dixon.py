@@ -5,6 +5,7 @@ import pytest
 from mrseq.scripts.grpe_flash_dixon import main as create_seq
 from mrseq.utils.system_defaults import sys_a
 from mrseq.utils.system_defaults import sys_b
+from mrseq.utils.system_defaults import sys_c
 
 EXPECTED_DUR = 18.86719  # defined 2026-03-17
 
@@ -16,7 +17,7 @@ def test_default_seq_duration(system_defaults):
     assert duration == pytest.approx(EXPECTED_DUR)
 
 
-@pytest.mark.parametrize('system', [sys_a, sys_b])
+@pytest.mark.parametrize('system', [sys_a, sys_b, sys_c])
 def test_seq_duration(system):
     """Test system dependance of sequence."""
     seq, _ = create_seq(system=system, show_plots=False)

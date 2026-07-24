@@ -39,3 +39,17 @@ sys_b = Opts(
     adc_raster_time=1e-7,
     block_duration_raster=10e-6,
 )
+
+sys_c = Opts(
+    max_grad=35,
+    grad_unit='mT/m',
+    max_slew=120,
+    slew_unit='T/m/s',
+    grad_raster_time=6.4e-6,
+    rf_ringdown_time=32e-6,
+    rf_raster_time=6.4e-6,
+    rf_dead_time=448e-6,
+    adc_dead_time=160e-6,
+    adc_raster_time=1e-7,
+    block_duration_raster=1e-7,
+)

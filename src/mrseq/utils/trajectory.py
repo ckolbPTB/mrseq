@@ -8,6 +8,7 @@ import numpy as np
 import pypulseq as pp
 
 from mrseq.utils.sequence_helper import find_gx_flat_time_on_adc_raster
+from mrseq.utils.sequence_helper import make_trapezoid_readout
 from mrseq.utils.sequence_helper import round_to_raster
 from mrseq.utils.system_defaults import sys_defaults
 from mrseq.utils.vds import variable_density_spiral_trajectory
@@ -172,7 +173,7 @@ class MultiEchoAcquisition:
             self._system.adc_raster_time,
         )
 
-        self._gx = pp.make_trapezoid(
+        self._gx = make_trapezoid_readout(
             channel='x', flat_area=gx_flat_area, flat_time=self._gx_flat_time, system=self._system
         )
 

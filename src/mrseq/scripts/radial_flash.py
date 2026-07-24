@@ -11,6 +11,7 @@ from raw2ismrmrd.utils import MatrixSize
 from raw2ismrmrd.utils import create_header
 
 from mrseq.utils import find_gx_flat_time_on_adc_raster
+from mrseq.utils import make_trapezoid_readout
 from mrseq.utils import round_to_raster
 from mrseq.utils import sys_defaults
 from mrseq.utils import write_sequence
@@ -122,7 +123,7 @@ def radial_flash_kernel(
     # create readout gradient and ADC
     delta_k = 1 / (fov_xy * readout_oversampling)
     n_readout_with_oversampling = int(n_readout * readout_oversampling)
-    gx = pp.make_trapezoid(
+    gx = make_trapezoid_readout(
         channel='x', flat_area=n_readout_with_oversampling * delta_k, flat_time=gx_flat_time, system=system
     )
     n_readout_with_oversampling = n_readout_with_oversampling + np.mod(n_readout_with_oversampling, 2)  # make even
