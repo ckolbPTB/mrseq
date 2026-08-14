@@ -166,7 +166,7 @@ def girf_triangle_kernel(
                             rise_time=rise_time_val,
                             flat_time=0,
                             amplitude=amp,
-                            delay=0,
+                            delay=50e-6,
                         )
                         seq.add_block(adc, g_triangle)
 
@@ -180,7 +180,6 @@ def girf_triangle_kernel(
     seq.set_definition('ReconMatrix', (n_readout, 1, 1))
     seq.set_definition('SliceThickness', slice_thickness)
     seq.set_definition('SlicePos', slice_pos)
-    seq.set_definition('TE', 0)
     seq.set_definition('TR', tr)
     seq.set_definition('RiseTimes', rise_times)
     seq.set_definition('CameraNrDynamics', cam_nr_dynamics)
@@ -200,7 +199,7 @@ def girf_triangle_kernel(
 
 def main(
     system: pp.Opts | None = None,
-    n_avg: int = 3,
+    n_avg: int = 9,
     tr: float = 2.0,
     slice_thickness: float = 1.5e-3,
     slice_pos: list[float] | None = None,
