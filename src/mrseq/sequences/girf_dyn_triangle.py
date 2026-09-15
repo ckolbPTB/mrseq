@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 import pypulseq as pp
 
+from mrseq.utils import round_to_raster
 from mrseq.utils import sys_defaults
 from mrseq.utils import write_sequence
 
@@ -23,14 +24,9 @@ def girf_triangle_kernel(
     slice_pos: Sequence[float],
     g_amplitude_coeff: Sequence[float],
     tr: float,
-    adc_delay: float,
+    eddy_current_delay: float,
     rise_times: Sequence[float],
-    grad_free: float,
-    trig_duration: float,
-    cam_acq_duration: float,
-    cam_interleave_tr: float,
-    cam_acq_delay: float,
-    cam_nr_sync_dyn: int,
+    gradient_pre_emphasis_delay: float,
 ) -> pp.Sequence:
     """Generate a GIRF sequence with triangular gradients.
 
@@ -60,22 +56,13 @@ def girf_triangle_kernel(
         List of amplitude coefficients for gradient encoding.
     tr
         Repetition time (in seconds).
-    adc_delay
-        Delay between gradient and ADC to minimize eddy current effects (in seconds).
+    eddy_current_delay
+        Delay between slice refocusing gradient and ADC to minimize eddy current effects (in seconds).
     rise_times
         List of gradient rise times (in seconds).
-    grad_free
-        Gradient-free period after trigger (in seconds).
-    trig_duration
-        Duration of trigger pulse (in seconds).
-    cam_acq_duration
-        Camera acquisition duration (in seconds).
-    cam_interleave_tr
-        Camera interleave TR (in seconds).
-    cam_acq_delay
-        Camera acquisition delay (in seconds).
-    cam_nr_sync_dyn
-        Number of camera sync dynamics.
+    gradient_pre_emphasis_delay
+        The gradient is delayed by this value relative to the ADC to ensure the full gradient signal is caught, even
+        if the gradient starts earlier than the nominal gradient due to the pre-emphasis of the gradient signal.
 
     Returns
     -------
@@ -103,13 +90,10 @@ def girf_triangle_kernel(
         return_gz=True,
     )
 
-    # Create necessary delays
-    grad_free_time = pp.make_delay(grad_free)
-    delay_tr = pp.make_delay(tr)
-    delay_ec = pp.make_delay(adc_delay)
-
-    # Create trigger pulse for MFC
-    trig = pp.make_digital_output_pulse(channel='ext1', duration=trig_duration, delay=0)
+    # Verify triangular gradients are always shorter than readout. We use 2xgradient_pre_emphasis_delay to also capture
+    # delayed effects at the end of the gradient due to the pre-emphasis.
+    if adc_duration < (max(rise_times) * 2 + system.adc_dead_time + 2 * gradient_pre_emphasis_delay):
+        raise ValueError('ADC too short for current rise times and system settings.')
 
     # Calculate ADC parameters
     n_readout = int(np.round(adc_duration / dwell_time))
@@ -119,11 +103,6 @@ def girf_triangle_kernel(
         system=system,
         delay=system.adc_dead_time,
     )
-
-    # Calculate total number of dynamics for camera
-    grad_channels = ['x', 'y', 'z']
-    cam_nr_dynamics = len(g_amplitude_coeff) * len(slice_pos) * len(grad_channels) * len(rise_times) * n_avg
-    print(f'Total dynamics for camera: {cam_nr_dynamics}')
 
     # Build sequence with nested loops
     for avg in range(n_avg):
@@ -155,9 +134,7 @@ def girf_triangle_kernel(
                         seq.add_block(gzr)
 
                         # Add eddy current compensation delay
-                        seq.add_block(delay_ec)
-                        seq.add_block(trig)
-                        seq.add_block(grad_free_time)
+                        seq.add_block(pp.make_delay(eddy_current_delay))
 
                         # Create triangle gradient (trapezoid with no flat time)
                         g_triangle = pp.make_trapezoid(
@@ -166,12 +143,12 @@ def girf_triangle_kernel(
                             rise_time=rise_time_val,
                             flat_time=0,
                             amplitude=amp,
-                            delay=50e-6,
+                            delay=round_to_raster(gradient_pre_emphasis_delay + adc.delay, system.grad_raster_time),
                         )
                         seq.add_block(adc, g_triangle)
 
                         # Add TR delay
-                        seq.add_block(delay_tr)
+                        seq.add_block(pp.make_delay(tr))
 
         seq.add_block(avg_label)
 
@@ -182,16 +159,10 @@ def girf_triangle_kernel(
     seq.set_definition('SlicePos', slice_pos)
     seq.set_definition('TR', tr)
     seq.set_definition('RiseTimes', rise_times)
-    seq.set_definition('CameraNrDynamics', cam_nr_dynamics)
-    seq.set_definition('CameraNrSyncDynamics', cam_nr_sync_dyn)
-    seq.set_definition('CameraAcqDuration', cam_acq_duration)
-    seq.set_definition('CameraInterleaveTR', cam_interleave_tr)
-    seq.set_definition('CameraAcqDelay', cam_acq_delay)
-
     seq.set_definition('AdcDuration', adc_duration)
     seq.set_definition('DwellTime', dwell_time)
     seq.set_definition('SlewRate', system.max_slew)
-    seq.set_definition('AdcDelay', adc_delay)
+    seq.set_definition('GradientPreEmphasisDelay', gradient_pre_emphasis_delay)
     seq.set_definition('GradAmplitudeCoeff', g_amplitude_coeff)
 
     return seq
@@ -211,16 +182,11 @@ def main(
     """Generate a sequence with triangular gradients to estimate the GIRF.
 
     This sequence allows for the calculation of a gradient impulse response function (GIRF) using the Dyn
-    method [DUY1998]_ or the use of a field camera [VAN2013]_ .
+    method [DUY1998]_ .
 
 
     .. [DUY1998] Dyn J, Yang Y, Frank JA, and van der Veen JW (1998), Simple Correction Method fork-Space Trajectory
        Deviations in MRI. JMR 132, 150-153. https://doi.org/10.1006/jmre.1998.1396
-
-    .. [VAN2013] Vannesjo SJ, Haeberlin M, Kasper L, Pavan M, Wilm, BJ, Barnet C, and PRuessman KP (2013),
-       Gradient system characterization by impulse response measurements with a dynamic field camera. MRM 69. 583-593.
-       https://doi.org/10.1002/mrm.24263
-
 
     Parameters
     ----------
@@ -269,16 +235,9 @@ def main(
 
     # Define sequence parameters
     g_amplitude_coeff = [-1.0, 0.0]  # amplitude coefficients for gradient encoding
-    adc_delay = 10e-6  # eddy current compensation delay [s]
+    eddy_current_delay = 10e-6  # eddy current compensation delay [s]
     rise_times = [5e-5, 6e-5, 7e-5, 8e-5, 9e-5, 1e-4, 1.1e-4, 1.2e-4, 1.3e-4, 1.4e-4, 1.5e-4, 1.6e-4]  # rise times [s]
-
-    # Define camera and trigger parameters
-    grad_free = 0.5e-3  # gradient-free period after trigger [s]
-    trig_duration = 10e-6  # trigger pulse duration [s]
-    cam_acq_duration = 0.07  # camera acquisition duration [s]
-    cam_interleave_tr = 0.4  # camera interleave TR [s]
-    cam_acq_delay = 0.0  # camera acquisition delay [s]
-    cam_nr_sync_dyn = 0  # number of camera sync dynamics
+    gradient_pre_emphasis_delay = 50e-6
 
     # Define sequence filename
     filename = f'{Path(__file__).stem}'
@@ -299,14 +258,9 @@ def main(
         slice_pos=slice_pos,
         g_amplitude_coeff=g_amplitude_coeff,
         tr=tr,
-        adc_delay=adc_delay,
+        eddy_current_delay=eddy_current_delay,
         rise_times=rise_times,
-        grad_free=grad_free,
-        trig_duration=trig_duration,
-        cam_acq_duration=cam_acq_duration,
-        cam_interleave_tr=cam_interleave_tr,
-        cam_acq_delay=cam_acq_delay,
-        cam_nr_sync_dyn=cam_nr_sync_dyn,
+        gradient_pre_emphasis_delay=gradient_pre_emphasis_delay,
     )
 
     # Check sequence timing
