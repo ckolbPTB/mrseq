@@ -6,34 +6,29 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pypulseq as pp
-import torch
 from mrpro.data import KData
 from mrpro.data.traj_calculators import KTrajectoryCartesian
 from pypulseq import eps
 from scipy.interpolate import PPoly
 
 
-def unwrap_phase_difference(data: torch.Tensor) -> torch.Tensor:
+def unwrap_phase_difference(data: np.ndarray) -> np.ndarray:
     """Return doubly-unwrapped phase of polarity[0] - polarity[1].
 
     Input shape:  ``(n_avg, 2, n_axes, n_rise, n_samples)``
     Output shape: ``(n_avg, n_axes, n_rise, n_samples)``
     """
-    diff = data[:, 0, ...].angle() - data[:, 1, ...].angle()
-    return torch.from_numpy(np.unwrap(np.unwrap(diff.numpy())))
+    diff = np.angle(data[:, 0, ...]) - np.angle(data[:, 1, ...])
+    return np.unwrap(np.unwrap(diff))
 
 
 def phase_to_gradient(
-    phase_mean: torch.Tensor,
-    phase_std: torch.Tensor,
-    slice_pos: float,
-    gamma: float,
-    dwell_time: float,
-) -> tuple[torch.Tensor, torch.Tensor]:
+    phase_mean: np.ndarray, phase_std: np.ndarray, slice_pos: float, gamma: float, dwell_time: float
+) -> tuple[np.ndarray, np.ndarray]:
     """Convert unwrapped-phase arrays to gradient waveforms via finite difference."""
     scale = slice_pos * gamma * dwell_time
-    grad_mean = phase_mean.diff(dim=-1) / scale
-    grad_std = phase_std.diff(dim=-1) / scale
+    grad_mean = np.diff(phase_mean, axis=-1) / scale
+    grad_std = np.diff(phase_std, axis=-1) / scale
     return grad_mean, grad_std
 
 
@@ -44,85 +39,26 @@ def build_input_triangles(
     enumerate_coeff: Sequence[float],
     dwell_time: float,
     n_samples: int,
-) -> torch.Tensor:
+) -> np.ndarray:
     """Build ideal triangular input waveforms.
 
     Returns
     -------
-    Tensor of shape ``(n_rise, n_samples)`` [T/m].
+    Array of shape ``(n_rise, n_samples)`` [T/m].
     """
-    triangles = torch.zeros(len(rise_times), n_samples)
+    triangles = np.zeros((len(rise_times), n_samples))
     for i, rise_time in enumerate(rise_times):
         n_rise = round(rise_time / dwell_time)
         n_pre = round(g_delay / dwell_time)
         amplitude = enumerate_coeff[0] * slew_rate * rise_time
 
-        slope_up = torch.linspace(0.0, amplitude, n_rise + 1)
-        slope_down = torch.linspace(amplitude, 0.0, n_rise + 1)
+        slope_up = np.linspace(0.0, amplitude, n_rise + 1)
+        slope_down = np.linspace(amplitude, 0.0, n_rise + 1)
 
         triangles[i, n_pre : n_pre + n_rise + 1] = slope_up
         triangles[i, n_pre + n_rise + 1 : n_pre + 2 * n_rise + 1] = slope_down[1:]
 
     return triangles
-
-
-import torch
-
-
-def apply_gmtf_to_single_gradient(
-    input_gradient: torch.Tensor, input_gradient_time: torch.Tensor, gmtf: torch.Tensor, gmtf_frequency: torch.Tensor
-) -> torch.Tensor:
-    """
-    Apply a Gradient Modulation Transfer Function (GMTF) correction.
-
-    The input gradient is resampled onto a uniform time grid matching the GMTF's frequency resolution, transformed
-    to the frequency domain, multiplied by the GMTF, and transformed back to obtain the predicted (corrected)
-    gradient waveform.
-
-    Parameters
-    ----------
-    input_gradient
-        Nominal gradient waveform, shape (M,).
-    input_gradient_time
-        1D tensor of time points (s) corresponding to `input_gradient`, of length M.
-    gmtf
-        Complex-valued GMTF, shape (N,).
-    gmtf_frequency
-        1D tensor of frequency values (Hz) corresponding to `gmtf`, of length N.
-
-    Returns
-    -------
-        Corrected gradient waveform, shape (3, N // 2), real-valued. (The result is theoretically complex, but
-        since the GMTF spectrum is symmetric, the imaginary part is expected to be negligible and is discarded.)
-    """
-    if gmtf.shape[-1] != len(gmtf_frequency):
-        raise ValueError('Gmtf values and frequency information need to have the same length.')
-    if input_gradient.shape[-1] != len(input_gradient_time):
-        raise ValueError('Input gradient and time information need to have the same length.')
-
-    n_freq = gmtf_frequency.shape[0]
-    n_time = n_freq // 2
-
-    # Time step and time axis matching the GMTF's frequency resolution
-    dt = 1 / gmtf_frequency[-1] / 2
-    girf_time = dt * torch.arange(n_time)
-
-    # Resample the nominal gradient onto the GMTF's time grid
-    grad_interp = torch.as_tensor(np.interp(girf_time, input_gradient_time, input_gradient, left=0, right=0))
-
-    # Forward FFT (zero-padded to 2x length to match GMTF's frequency grid)
-    grad_spectrum = torch.fft.fftshift(torch.fft.fft(grad_interp, n=2 * grad_interp.shape[-1], dim=-1), dim=-1)
-
-    # Apply GMTF correction in the frequency domain
-    corrected_spectrum = torch.fft.ifftshift(gmtf * grad_spectrum, dim=-1)
-
-    # Inverse FFT back to time domain, keep only the non-padded part
-    corrected_gradient = torch.fft.ifft(corrected_spectrum, dim=-1)
-    corrected_gradient = corrected_gradient[: grad_interp.shape[-1]]
-
-    # The corrected waveform is technically complex; since the GMTF spectrum is symmetric, the imaginary part
-    # should be very close to zero.
-    return torch.real(corrected_gradient), girf_time[: grad_interp.shape[-1]]
 
 
 def apply_gmtf_to_sequence(seq_file: str | Path, gmtf: 'Gmtf') -> list[np.ndarray]:
@@ -134,7 +70,7 @@ def apply_gmtf_to_sequence(seq_file: str | Path, gmtf: 'Gmtf') -> list[np.ndarra
         seq_file
             Path to the Pulseq (.seq) file describing the nominal gradient waveforms that were played out during the
             measurement.
-        gmtf:
+        gmtf
             Gmtf instance
 
     Returns
@@ -144,35 +80,52 @@ def apply_gmtf_to_sequence(seq_file: str | Path, gmtf: 'Gmtf') -> list[np.ndarra
     seq = pp.Sequence()
     seq.read(str(seq_file))
 
-    # get times
-    t_excitation = seq.rf_times()[0]
-    t_end = sum(seq.block_durations.values())
+    nominal_gradient_waveform = seq.waveforms()
 
-    # Read waveforms from Sequence and directly split into TR blocks.
-    # The results will be stored in gw_blocks, which is a list of len(t_excitation). Each entry is a list of
-    # length 3 (for x,y,z gradients). Each of the 3 entries is a np.array with 2 rows (time, amplitude).
-    gradient_waveform_input_blocks = []
-    for n, t_exc in enumerate(t_excitation):
-        block_start = t_exc
-        block_end = t_end if n == len(t_excitation) - 1 else t_excitation[n + 1]
-        gw_block = seq.waveforms(time_range=(block_start, block_end))
-        gradient_waveform_input_blocks.append(gw_block)
+    gradient_waveform_corrected = []
+    for grad_idx, grad in enumerate(nominal_gradient_waveform):
+        if len(grad[1]):
+            pad_factor = 2
 
-    gradient_waveform_corrected_blocks = []
-    for tr_idx, gw in enumerate(gradient_waveform_input_blocks):
-        gradient_waveform_corrected_blocks.append([])
-        for grad_idx, grad in enumerate(gw):
-            if len(grad[1]):
-                # subtract start time of the TR block from the time vector
-                grad_input_time = grad[0] - grad[0][0]
-                grad_corrected, grad_corrected_time = apply_gmtf_to_single_gradient(
-                    grad[1], grad_input_time, gmtf.gmtf[grad_idx, :], gmtf.frequency
-                )
-                gradient_waveform_corrected_blocks[tr_idx].append((grad_corrected_time + grad[0][0], grad_corrected))
-            else:
-                gradient_waveform_corrected_blocks[tr_idx].append(([], []))
+            input_gradient_time = grad[0]
+            input_gradient = grad[1]
 
-    return gradient_waveform_corrected_blocks
+            dt = 1 / gmtf.frequency[-1] / 2
+
+            # Build a uniform time grid covering the original (non-uniform) signal
+            n = int(np.ceil((input_gradient_time[-1] - input_gradient_time[0]) / dt)) + 1
+            uniform_time = input_gradient_time[0] + dt * np.arange(n)
+
+            # Resample signal onto the uniform grid
+            signal_uniform = np.interp(uniform_time, input_gradient_time, input_gradient, left=0, right=0)
+
+            n_padded = n * pad_factor
+
+            # FFT of the zero-padded signal
+            signal_fft = np.fft.fft(signal_uniform, n=n_padded)
+            signal_freq = np.fft.fftfreq(n_padded, d=dt)
+
+            # Sort gmtf by frequency so interpolation x-values are ascending
+            sort_idx = np.argsort(gmtf.frequency)
+            gmtf_frequency_sorted = gmtf.frequency[sort_idx]
+            gmtf_sorted = gmtf.gmtf[grad_idx, sort_idx]
+
+            # Interpolate GMTF (real and imaginary parts) onto the padded signal's frequency grid
+            gmtf_interp_real = np.interp(signal_freq, gmtf_frequency_sorted, gmtf_sorted.real, left=0, right=0)
+            gmtf_interp_imag = np.interp(signal_freq, gmtf_frequency_sorted, gmtf_sorted.imag, left=0, right=0)
+            gmtf_interp = gmtf_interp_real + 1j * gmtf_interp_imag
+
+            # Multiply in frequency domain (= convolution in time domain)
+            output_fft = signal_fft * gmtf_interp
+
+            # Back to time domain, crop to original signal length
+            grad_corrected, grad_corrected_time = np.real(np.fft.ifft(output_fft))[..., :n], uniform_time[:n]
+
+            gradient_waveform_corrected.append(np.stack((grad_corrected_time, grad_corrected)))
+        else:
+            gradient_waveform_corrected.append(grad)
+
+    return gradient_waveform_corrected
 
 
 def convert_waveforms_to_ppoly(gw_data: list[np.ndarray]) -> list[PPoly]:
@@ -210,15 +163,16 @@ def convert_waveforms_to_ppoly(gw_data: list[np.ndarray]) -> list[PPoly]:
 
         # Pad with near-zero-amplitude points just before/after the waveform
         # so that extrapolation outside the defined range goes cleanly to zero.
-        pre_pad = np.array([[gw[0, 0] - 2 * eps, gw[0, 0] - eps], [0, 0]])
-        post_pad = np.array([[gw[0, -1] + eps, gw[0, -1] + 2 * eps], [0, 0]])
+        gw_time = gw[0].astype(np.float64)
+        pre_pad = np.array([[gw_time[0] - 2 * eps, gw_time[0] - eps], [0, 0]])
+        post_pad = np.array([[gw_time[-1] + eps, gw_time[-1] + 2 * eps], [0, 0]])
         gw = np.hstack((pre_pad, gw, post_pad))
 
         # Avoid signed-zero artifacts (-0.0) in the amplitude row
         gw[1][gw[1] == -0.0] = 0.0
 
-        time = gw[0]
-        amplitude = gw[1]
+        time = gw[0].astype(np.float64)
+        amplitude = gw[1].astype(np.float64)
         slopes = np.diff(amplitude) / np.diff(time)
 
         gw_pp.append(PPoly(np.stack((slopes, amplitude[:-1])), time, extrapolate=True))
@@ -367,9 +321,9 @@ def calc_kspace_from_grad_waveforms(gw_pp, seq):
 
 
 def estimate_gmtf(
-    grad_input: torch.Tensor,
-    grad_output_mean: torch.Tensor,
-) -> torch.Tensor:
+    grad_input: np.ndarray,
+    grad_output_mean: np.ndarray,
+) -> np.ndarray:
     """Least-squares GMTF estimate over all rise times.
 
     Parameters
@@ -386,12 +340,12 @@ def estimate_gmtf(
     n_fft_in = 2 * (grad_input.shape[-1])
     n_fft_out = 2 * grad_output_mean.shape[-1]
 
-    in_spec = torch.fft.fftshift(torch.fft.fft(grad_input, n=n_fft_in, dim=-1), dim=-1)
-    out_spec = torch.fft.fftshift(torch.fft.fft(grad_output_mean, n=n_fft_out, dim=-1), dim=-1)
+    in_spec = np.fft.fftshift(np.fft.fft(grad_input, n=n_fft_in, axis=-1), axes=-1)
+    out_spec = np.fft.fftshift(np.fft.fft(grad_output_mean, n=n_fft_out, axis=-1), axes=-1)
 
     # Least-squares: sum_rt conj(H_in) * H_out  /  sum_rt |H_in|^2
-    numerator = (in_spec.conj() * out_spec).sum(dim=-2)  # sum over rise dim
-    denominator = (in_spec.abs() ** 2).sum(dim=-2)
+    numerator = np.sum(in_spec.conj() * out_spec, axis=-2)  # sum over rise dim
+    denominator = np.sum(np.abs(in_spec) ** 2, axis=-2)
     return numerator / denominator
 
 
@@ -405,34 +359,32 @@ class Gmtf:
     Attributes
     ----------
     gmtf
-        Complex-valued tensor containing the concatenated GMTF for the x, y, and z axes (in that order),
+        Complex-valued array containing the concatenated GMTF for the x, y, and z axes (in that order),
         with shape (3, N), where N is the number of frequency samples.
     frequency
-        1D tensor of frequency values (Hz) corresponding to the samples in `gmtf`, of length N.
+        1D array of frequency values (Hz) corresponding to the samples in `gmtf`, of length N.
     """
 
-    def __init__(
-        self, gmtf_z: torch.Tensor, gmtf_y: torch.Tensor, gmtf_x: torch.Tensor, frequency: torch.Tensor
-    ) -> None:
+    def __init__(self, gmtf_z: np.ndarray, gmtf_y: np.ndarray, gmtf_x: np.ndarray, frequency: np.ndarray) -> None:
         """
         Initialize the GMTF container.
 
         Parameters
         ----------
         gmtf_x
-            Complex-valued 1D tensor containing the GMTF for the x-axis, of length N.
+            Complex-valued 1D array containing the GMTF for the x-axis, of length N.
         gmtf_y
-            Complex-valued 1D tensor containing the GMTF for the y-axis, of length N.
+            Complex-valued 1D array containing the GMTF for the y-axis, of length N.
         gmtf_z
-            Complex-valued 1D tensor containing the GMTF for the z-axis, of length N.
+            Complex-valued 1D array containing the GMTF for the z-axis, of length N.
         frequency
-            1D real-valued tensor of frequency values (Hz), of length N, corresponding to the frequency axis of
+            1D real-valued array of frequency values (Hz), of length N, corresponding to the frequency axis of
             `gmtf_x`, `gmtf_y`, and`gmtf_z`.
 
         Raises
         ------
         ValueError
-            If `gmtf_x`, `gmtf_y`, `gmtf_z`, and `freq` are not all 1D tensors of the same length.
+            If `gmtf_x`, `gmtf_y`, `gmtf_z`, and `freq` are not all 1D arrays of the same length.
 
         Notes
         -----
@@ -448,7 +400,7 @@ class Gmtf:
         if len(set(lengths.values())) > 1:
             raise ValueError(f'gmtf_x, gmtf_y, gmtf_z, and freq must all have the same length, got: {lengths}.')
 
-        self.gmtf = torch.stack((gmtf_x, gmtf_y, gmtf_z))
+        self.gmtf = np.stack((gmtf_x, gmtf_y, gmtf_z))
         self.frequency = frequency
 
     @classmethod
@@ -480,14 +432,14 @@ class Gmtf:
                 kdata.header.acq_info.idx.average.squeeze(),
             )
         )
-        kdata_sorted = kdata[torch.as_tensor(idx)]
+        kdata_sorted = kdata[idx.tolist()]
         kdata_sorted = kdata_sorted.rearrange(
             '(avg rep ph) ... -> avg rep ph ...',
             rep=int(kdata.header.acq_info.idx.repetition.max()) + 1,
             avg=int(kdata.header.acq_info.idx.average.max()) + 1,
             ph=int(kdata.header.acq_info.idx.phase.max()) + 1,
         )
-        kdata_single_coil = kdata_sorted.compress_coils(n_compressed_coils=1).data.squeeze()
+        kdata_single_coil = kdata_sorted.compress_coils(n_compressed_coils=1).data.squeeze().numpy()
 
         # Get additional information from sequence
         sequence = pp.Sequence()
@@ -495,7 +447,7 @@ class Gmtf:
 
         dwell_time = sequence.get_definition('DwellTime')
         slice_pos = sequence.get_definition('SlicePos')
-        gamma = sequence.system.gamma * 2 * torch.pi
+        gamma = sequence.system.gamma * 2 * np.pi
         rise_times = sequence.get_definition('RiseTimes')
         slew_rate = sequence.get_definition('SlewRate') / sequence.system.gamma
         g_delay = sequence.get_definition('GradientPreEmphasisDelay')
@@ -503,9 +455,14 @@ class Gmtf:
 
         # Unwrape phase
         phase = unwrap_phase_difference(kdata_single_coil)
-        phase_mean = phase.mean(dim=0)
-        phase_std = phase.std(dim=0)
+        phase_mean = phase.mean(axis=0)
+        phase_std = phase.std(axis=0)
         grad_output_mean, _grad_output_std = phase_to_gradient(phase_mean, phase_std, slice_pos, gamma, dwell_time)
+
+        # TODO
+        print('FXINING UNEXPLAINED SHIFT')
+        output_delay = 1
+        grad_output_mean = np.roll(grad_output_mean, output_delay, axis=-1)
 
         # Calculate ideal triangles
         grad_input = build_input_triangles(
@@ -513,11 +470,11 @@ class Gmtf:
         )
 
         # Check for any sign flips
-        corr = torch.sum(grad_input * grad_output_mean)
+        corr = np.sum(grad_input * grad_output_mean)
         grad_output_mean = grad_output_mean if corr >= 0 else grad_output_mean * -1
 
         gmtf = estimate_gmtf(grad_input, grad_output_mean)
-        frequency = (1.0 / dwell_time) * torch.arange(-gmtf.shape[-1] // 2, gmtf.shape[-1] // 2) / (gmtf.shape[-1])
+        frequency = (1.0 / dwell_time) * np.arange(-gmtf.shape[-1] // 2, gmtf.shape[-1] // 2) / (gmtf.shape[-1])
         return Gmtf(gmtf_x=gmtf[0, :], gmtf_y=gmtf[1, :], gmtf_z=gmtf[2, :], frequency=frequency)
 
     def plot(
@@ -554,8 +511,8 @@ class Gmtf:
 
         fig, (ax1, ax2) = plt.subplots(1, 2, sharex=True, figsize=(10, 5))
         for k, label in enumerate(grad_axes):
-            ax1.plot(self.frequency[half:] * 1e-3, abs(self.gmtf.numpy()[k, half:]), label=label)
-            ax2.plot(self.frequency[half:] * 1e-3, np.unwrap(np.angle(self.gmtf.numpy()[k, half:])), label=label)
+            ax1.plot(self.frequency[half:] * 1e-3, abs(self.gmtf[k, half:]), label=label)
+            ax2.plot(self.frequency[half:] * 1e-3, np.unwrap(np.angle(self.gmtf[k, half:])), label=label)
 
         ax1.set(xlabel='Frequency (kHz)', title='GMTF Magnitude', xlim=frequency_lim, ylim=amplitude_lim)
         ax2.set(xlabel='Frequency (kHz)', title='GMTF Phase', xlim=frequency_lim, ylim=phase_lim)
@@ -569,11 +526,7 @@ class Gmtf:
         fig.tight_layout()
         plt.show()
 
-    def correct_gradients(
-        self,
-        seq_file: str | Path,
-        freq_threshold: float,
-    ) -> torch.Tensor:
+    def correct_gradients(self, seq_file: str | Path, freq_threshold: float | None = None) -> np.ndarray:
         """
         Apply GMTF-based correction to the gradient waveforms in a Pulseq sequence file, and output new trajectory.
 
@@ -589,3 +542,15 @@ class Gmtf:
         -------
             Corrected trajectory.
         """
+        if freq_threshold:
+            print('Not implemented')
+        gradient_waveform_corrected = apply_gmtf_to_sequence(seq_file, self)
+        gradient_waveform_pp_corrected_blocks = convert_waveforms_to_ppoly(gradient_waveform_corrected)
+
+        seq = pp.Sequence()
+        seq.read(seq_file)
+        k_traj_adc, _k_traj, _t_excitation, _t_refocusing, _t_adc = calc_kspace_from_grad_waveforms(
+            gradient_waveform_pp_corrected_blocks, seq
+        )
+
+        return k_traj_adc

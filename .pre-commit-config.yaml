@@ -50,10 +50,7 @@ repos:
           - pytest
           - matplotlib
           - scipy-stubs
-          - torch>=2.6.0
           - mrpro
-          - "--index-url=https://download.pytorch.org/whl/cpu"
-          - "--extra-index-url=https://pypi.python.org/simple"
 
 ci:
   autofix_commit_msg: |
