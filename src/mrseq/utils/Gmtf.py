@@ -233,7 +233,7 @@ def calc_kspace_from_grad_waveforms(
 
         gm_i = gw_i.antiderivative()
         gm_pp.append(gm_i)
-        tc.append(gw_i.x)
+        tc.append(gm_i.x)
         # "Sample" ramps for display purposes.  Otherwise piecewise-linear display (plot) fails
         ii = np.flatnonzero(np.abs(gm_i.c[0, :]) > 1e-7 * seq.system.max_slew)
 
@@ -293,18 +293,18 @@ def calc_kspace_from_grad_waveforms(
         ii_next_refocusing = -1
 
     k_traj = np.zeros((ng, len(t_ktraj)))
-    for i in range(ng):
-        gw_i = gw_pp[i]
-        if gw_i is None:
+    for n in range(ng):
+        gm_n = gm_pp[n]
+        if gm_n is None:
             continue
 
         it = np.where(
             np.logical_and(
-                t_ktraj >= t_acc * round(t_acc_inv * gw_i.x[0]),
-                t_ktraj <= t_acc * round(t_acc_inv * gw_i.x[-1]),
+                t_ktraj >= t_acc * round(t_acc_inv * gm_n.x[0]),
+                t_ktraj <= t_acc * round(t_acc_inv * gm_n.x[-1]),
             )
         )[0]
-        k_traj[i, it] = gw_i(t_ktraj[it])
+        k_traj[i, it] = gm_n(t_ktraj[it])
         if t_ktraj[it[-1]] < t_ktraj[-1]:
             k_traj[i, it[-1] + 1 :] = k_traj[i, it[-1]]
 
