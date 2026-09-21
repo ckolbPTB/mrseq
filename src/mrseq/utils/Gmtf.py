@@ -131,7 +131,7 @@ def apply_gmtf_to_sequence(seq_file_or_object: str | Path | pp.Sequence, gmtf: '
     return gradient_waveform_corrected
 
 
-def convert_waveforms_to_ppoly(gw_data: list[np.ndarray]) -> list[PPoly]:
+def convert_waveforms_to_ppoly(gw_data: list[np.ndarray]) -> Sequence[PPoly | None]:
     """
     Convert gradient waveforms into piecewise polynomial (PPoly) representations.
 
@@ -157,7 +157,7 @@ def convert_waveforms_to_ppoly(gw_data: list[np.ndarray]) -> list[PPoly]:
     n_grad_channels = len(gw_data)
     eps = 1e-12
 
-    gw_pp = []
+    gw_pp: list[PPoly | None] = []
     for grad_idx in range(n_grad_channels):
         gw = gw_data[grad_idx]
 
@@ -187,52 +187,62 @@ def convert_waveforms_to_ppoly(gw_data: list[np.ndarray]) -> list[PPoly]:
 
 
 def calc_kspace_from_grad_waveforms(
-    gw_pp: list[PPoly], seq: pp.Sequence
+    gw_pp: Sequence[PPoly | None], seq: pp.Sequence
 ) -> tuple[np.ndarray, np.ndarray, list[float], list[float], np.ndarray]:
+    """Calculate k-space trajectory from gradient waveforms.
+
+    This function is mainly a copy of pypulseq.Sequence.calculate_kspace but allows to calculate the k-space
+    trajectory from a separately provided list of piecewise polynomial representations.
+
+    Parameters
+    ----------
+    gw_pp
+        Sequence of piecewise polynomial representations, one per gradient channel, in the same order as `gw_data`.
+    seq
+        Pulseq sequence object.
+
+    Returns
+    -------
+    k_traj_adc
+        K-space trajectory sampled at `t_adc` timepoints.
+    k_traj
+        K-space trajectory of the entire pulse sequence.
+    t_excitation
+        Excitation timepoints.
+    t_refocusing
+        Refocusing timepoints.
+    t_adc
+        Sampling timepoints.
+
+    """
     # get timings from sequence
     total_duration = sum(seq.block_durations.values())
-    t_excitation, fp_excitation, t_refocusing, _ = seq.rf_times()
+    t_excitation, _fp_excitation, t_refocusing, _ = seq.rf_times()
     t_adc, _ = seq.adc_times()
 
     ng = len(gw_pp)
 
-    # Calculate slice positions.
-    # For now we entirely rely on the excitation -- ignoring complicated interleaved refocused sequences
-    if len(t_excitation) > 0:
-        # Position in x, y, z
-        slice_pos = np.zeros((ng, len(t_excitation)))
-        for j in range(ng):
-            if gw_pp[j] is None:
-                slice_pos[j] = np.nan
-            else:
-                # Check for divisions by zero to avoid numpy warning
-                divisor = np.array(gw_pp[j](t_excitation))
-                slice_pos[j, divisor != 0.0] = fp_excitation[0, divisor != 0.0] / divisor[divisor != 0.0]
-                slice_pos[j, divisor == 0.0] = np.nan
-
-        slice_pos[~np.isfinite(slice_pos)] = 0  # Reset undefined to 0
-    else:
-        slice_pos = []
-
     # Integrate waveforms as PPs to produce gradient moments
-    gm_pp = []
+    gm_pp: list[PPoly | None] = []
     tc = []
     for i in range(ng):
-        if gw_pp[i] is None:
+        gw_i = gw_pp[i]
+        if gw_i is None:
             gm_pp.append(None)
             continue
 
-        gm_pp.append(gw_pp[i].antiderivative())
-        tc.append(gm_pp[i].x)
+        gm_i = gw_i.antiderivative()
+        gm_pp.append(gm_i)
+        tc.append(gw_i.x)
         # "Sample" ramps for display purposes.  Otherwise piecewise-linear display (plot) fails
-        ii = np.flatnonzero(np.abs(gm_pp[i].c[0, :]) > 1e-7 * seq.system.max_slew)
+        ii = np.flatnonzero(np.abs(gm_i.c[0, :]) > 1e-7 * seq.system.max_slew)
 
         # Do nothing if there are no ramps
         if ii.shape[0] == 0:
             continue
 
-        starts = np.int64(np.floor((gm_pp[i].x[ii] + eps) / seq.grad_raster_time))
-        ends = np.int64(np.ceil((gm_pp[i].x[ii + 1] - eps) / seq.grad_raster_time))
+        starts = np.floor((gm_i.x[ii] + eps) / seq.grad_raster_time).astype(np.int64)
+        ends = np.ceil((gm_i.x[ii + 1] - eps) / seq.grad_raster_time).astype(np.int64)
 
         # Create all ranges starts[0]:ends[0], starts[1]:ends[1], etc.
         lengths = ends - starts + 1
@@ -244,8 +254,7 @@ def calc_kspace_from_grad_waveforms(
         inds[start_inds] = np.concatenate(([starts[0]], np.diff(starts) - lengths[:-1] + 1))
 
         tc.append(np.cumsum(inds) * seq.grad_raster_time)
-    if tc != []:
-        tc = np.concatenate(tc)
+    tc_arr = np.concatenate(tc) if tc else np.array([])
 
     t_acc = 1e-10  # Temporal accuracy
     t_acc_inv = 1 / t_acc
@@ -255,7 +264,7 @@ def calc_kspace_from_grad_waveforms(
             t_acc_inv
             * np.array(
                 [
-                    *tc,
+                    *tc_arr,
                     0,
                     *np.asarray(t_excitation) - 2 * seq.rf_raster_time,
                     *np.asarray(t_excitation) - seq.rf_raster_time,
@@ -285,16 +294,17 @@ def calc_kspace_from_grad_waveforms(
 
     k_traj = np.zeros((ng, len(t_ktraj)))
     for i in range(ng):
-        if gw_pp[i] is None:
+        gw_i = gw_pp[i]
+        if gw_i is None:
             continue
 
         it = np.where(
             np.logical_and(
-                t_ktraj >= t_acc * round(t_acc_inv * gm_pp[i].x[0]),
-                t_ktraj <= t_acc * round(t_acc_inv * gm_pp[i].x[-1]),
+                t_ktraj >= t_acc * round(t_acc_inv * gw_i.x[0]),
+                t_ktraj <= t_acc * round(t_acc_inv * gw_i.x[-1]),
             )
         )[0]
-        k_traj[i, it] = gm_pp[i](t_ktraj[it])
+        k_traj[i, it] = gw_i(t_ktraj[it])
         if t_ktraj[it[-1]] < t_ktraj[-1]:
             k_traj[i, it[-1] + 1 :] = k_traj[i, it[-1]]
 
@@ -306,7 +316,9 @@ def calc_kspace_from_grad_waveforms(
         if ii_next_excitation >= 0 and i_excitation[ii_next_excitation] == i_period:
             if abs(t_ktraj[i_period] - t_excitation[ii_next_excitation]) > t_acc:
                 raise Warning(
-                    f'abs(t_ktraj[i_period]-t_excitation[ii_next_excitation]) < {t_acc} failed for ii_next_excitation={ii_next_excitation} error={t_ktraj(i_period) - t_excitation(ii_next_excitation)}'
+                    f'abs(t_ktraj[i_period]-t_excitation[ii_next_excitation]) < {t_acc} failed for ',
+                    f'ii_next_excitation={ii_next_excitation} ',
+                    f'error={t_ktraj[i_period] - t_excitation[ii_next_excitation]}',
                 )
             dk = -k_traj[:, i_period]
             if i_period > 0:

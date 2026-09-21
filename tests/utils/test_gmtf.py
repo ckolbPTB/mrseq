@@ -11,7 +11,7 @@ from mrseq.utils.Gmtf import phase_to_gradient
 from mrseq.utils.Gmtf import unwrap_phase_difference
 
 
-def create_test_sequence() -> tuple[pp.Sequence, np.ndarray]:
+def create_test_sequence() -> tuple[pp.Sequence, np.ndarray, float]:
     """
     Build a simple test sequence: RF excitation, a negative pre-winder followed by a readout gradient.
 
@@ -95,6 +95,7 @@ def test_recovers_original_values_at_breakpoints():
     amplitude = np.array([0.0, 2.0, -1.0, 0.0])
     gw_data = [np.stack((time, amplitude))]
     result = convert_waveforms_to_ppoly(gw_data)
+    assert result[0] is not None
     np.testing.assert_allclose(result[0](time), amplitude, atol=1e-10)
 
 
@@ -104,11 +105,12 @@ def test_linear_interpolation_between_breakpoints():
     amplitude = np.array([0.0, 4.0])
     gw_data = [np.stack((time, amplitude))]
     result = convert_waveforms_to_ppoly(gw_data)
+    assert result[0] is not None
     assert np.isclose(result[0](1.0), 2.0, atol=1e-10)
 
 
 def test_error_message_identifies_correct_channel_for_nan():
-    """Test correct channel for invalid input"""
+    """Test correct channel for invalid input."""
     gw_data = [
         np.array([[0.0, 1.0], [0.0, 1.0]]),
         np.array([[0.0, 1.0], [0.0, np.nan]]),
@@ -118,7 +120,7 @@ def test_error_message_identifies_correct_channel_for_nan():
 
 
 def test_error_message_identifies_correct_channel_for_inf():
-    """Test correct channel for invalid input"""
+    """Test correct channel for invalid input."""
     gw_data = [
         np.array([[0.0, 1.0], [0.0, 1.0]]),
         np.array([[0.0, 1.0], [0.0, 1.0]]),
@@ -138,10 +140,12 @@ def test_convert_waveforms_to_ppoly():
     eval_points = np.linspace(0, 1, 100)
     assert ppoly_gradients[1] == ppoly_gradients_pypulseq[1]  # None
     assert ppoly_gradients[2] == ppoly_gradients_pypulseq[2]  # None
+    assert ppoly_gradients[0] is not None
     np.testing.assert_allclose(ppoly_gradients[0](eval_points), ppoly_gradients_pypulseq[0](eval_points))
 
 
 def test_calc_kspace_from_grad_waveforms():
+    """Correct k-space trajectory from gradient."""
     seq, _, _ = create_test_sequence()
     ppoly_gradients_pypulseq = seq.get_gradients()
     k_traj_adc_pp, k_traj_pp, _, _, _ = seq.calculate_kspace()
