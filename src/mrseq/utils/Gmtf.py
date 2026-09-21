@@ -573,10 +573,10 @@ class Gmtf:
         if freq_threshold:
             print('Not implemented')
         gradient_waveform_corrected = apply_gmtf_to_sequence(seq, self)
-        gradient_waveform_pp_corrected_blocks = convert_waveforms_to_ppoly(gradient_waveform_corrected)
+        gradient_waveform_pp_corrected = convert_waveforms_to_ppoly(gradient_waveform_corrected)
 
         k_traj_adc, _k_traj, _t_excitation, _t_refocusing, _t_adc = calc_kspace_from_grad_waveforms(
-            gradient_waveform_pp_corrected_blocks, seq
+            gradient_waveform_pp_corrected, seq
         )
 
         return k_traj_adc

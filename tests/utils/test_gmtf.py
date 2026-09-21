@@ -178,16 +178,7 @@ def test_gmtf_trajectory_scaling(scaling, shift):
     linear_phase = np.exp(-2j * np.pi * frequency * -shift * dwell_time)
     gmtf = Gmtf(gmtf_x=np.ones(n) * scaling * linear_phase, gmtf_y=np.ones(n), gmtf_z=np.ones(n), frequency=frequency)
     ktraj_gmtf = gmtf.correct_gradients(seq)
-    np.testing.assert_allclose(ktraj_gmtf, ktraj_orig * scaling, rtol=1e-3, atol=1e-2)
-
-
-@pytest.mark.parametrize('shift', (0, -2, 2))
-def test_gmtf_trajectory_shift(shift):
-    """GMTF with amplitude 1 and linear phase ramp."""
-    n = 500
-    seq, ktraj_orig, dwell_time = create_test_sequence()
-    frequency = np.linspace(-1e5, 1e5, n)
-    linear_phase = np.exp(-2j * np.pi * frequency * -shift * dwell_time)
-    gmtf = Gmtf(gmtf_x=np.ones(n) * linear_phase, gmtf_y=np.ones(n), gmtf_z=np.ones(n), frequency=frequency)
-    ktraj_gmtf = gmtf.correct_gradients(seq)
-    np.testing.assert_allclose(ktraj_gmtf, ktraj_orig + shift, rtol=1e-3, atol=1e-2)
+    delta_k = np.diff(ktraj_orig)[0, 0]  # shift is in units of delta k
+    np.testing.assert_allclose(ktraj_gmtf[0], (ktraj_orig[0] + shift * delta_k) * scaling, rtol=1e-3, atol=1e-2)
+    np.testing.assert_allclose(ktraj_gmtf[1], ktraj_orig[1], rtol=1e-3, atol=1e-2)
+    np.testing.assert_allclose(ktraj_gmtf[2], ktraj_orig[2], rtol=1e-3, atol=1e-2)
