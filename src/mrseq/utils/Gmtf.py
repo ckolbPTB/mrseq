@@ -304,9 +304,9 @@ def calc_kspace_from_grad_waveforms(
                 t_ktraj <= t_acc * round(t_acc_inv * gm_n.x[-1]),
             )
         )[0]
-        k_traj[i, it] = gm_n(t_ktraj[it])
+        k_traj[n, it] = gm_n(t_ktraj[it])
         if t_ktraj[it[-1]] < t_ktraj[-1]:
-            k_traj[i, it[-1] + 1 :] = k_traj[i, it[-1]]
+            k_traj[n, it[-1] + 1 :] = k_traj[i, it[-1]]
 
     # Convert gradient moments to k-space positions
     dk = -k_traj[:, 0]
