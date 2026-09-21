@@ -61,7 +61,7 @@ def build_input_triangles(
     return triangles
 
 
-def apply_gmtf_to_sequence(seq_file: str | Path, gmtf: 'Gmtf') -> list[np.ndarray]:
+def apply_gmtf_to_sequence(seq_file_or_object: str | Path | pp.Sequence, gmtf: 'Gmtf') -> list[np.ndarray]:
     """
     Apply Gmtf correction to all gradient waveforms in sequence and return corrected gradient waveform.
 
@@ -77,8 +77,11 @@ def apply_gmtf_to_sequence(seq_file: str | Path, gmtf: 'Gmtf') -> list[np.ndarra
     -------
         Corrected gradient waveform
     """
-    seq = pp.Sequence()
-    seq.read(str(seq_file))
+    if isinstance(seq_file_or_object, pp.Sequence):
+        seq = seq_file_or_object
+    else:
+        seq = pp.Sequence()
+        seq.read(str(seq_file_or_object))
 
     nominal_gradient_waveform = seq.waveforms()
 
@@ -158,29 +161,34 @@ def convert_waveforms_to_ppoly(gw_data: list[np.ndarray]) -> list[PPoly]:
     for grad_idx in range(n_grad_channels):
         gw = gw_data[grad_idx]
 
-        if not np.all(np.isfinite(gw)):
-            raise ValueError(f'Gradient channel {grad_idx}: not all elements of the generated waveform are finite.')
+        if len(gw[0]):
+            if not np.all(np.isfinite(gw)):
+                raise ValueError(f'Gradient channel {grad_idx}: not all elements of the generated waveform are finite.')
 
-        # Pad with near-zero-amplitude points just before/after the waveform
-        # so that extrapolation outside the defined range goes cleanly to zero.
-        gw_time = gw[0].astype(np.float64)
-        pre_pad = np.array([[gw_time[0] - 2 * eps, gw_time[0] - eps], [0, 0]])
-        post_pad = np.array([[gw_time[-1] + eps, gw_time[-1] + 2 * eps], [0, 0]])
-        gw = np.hstack((pre_pad, gw, post_pad))
+            # Pad with near-zero-amplitude points just before/after the waveform
+            # so that extrapolation outside the defined range goes cleanly to zero.
+            gw_time = gw[0].astype(np.float64)
+            pre_pad = np.array([[gw_time[0] - 2 * eps, gw_time[0] - eps], [0, 0]])
+            post_pad = np.array([[gw_time[-1] + eps, gw_time[-1] + 2 * eps], [0, 0]])
+            gw = np.hstack((pre_pad, gw, post_pad))
 
-        # Avoid signed-zero artifacts (-0.0) in the amplitude row
-        gw[1][gw[1] == -0.0] = 0.0
+            # Avoid signed-zero artifacts (-0.0) in the amplitude row
+            gw[1][gw[1] == -0.0] = 0.0
 
-        time = gw[0].astype(np.float64)
-        amplitude = gw[1].astype(np.float64)
-        slopes = np.diff(amplitude) / np.diff(time)
+            time = gw[0].astype(np.float64)
+            amplitude = gw[1].astype(np.float64)
+            slopes = np.diff(amplitude) / np.diff(time)
 
-        gw_pp.append(PPoly(np.stack((slopes, amplitude[:-1])), time, extrapolate=True))
+            gw_pp.append(PPoly(np.stack((slopes, amplitude[:-1])), time, extrapolate=True))
+        else:
+            gw_pp.append(None)
 
     return gw_pp
 
 
-def calc_kspace_from_grad_waveforms(gw_pp, seq):
+def calc_kspace_from_grad_waveforms(
+    gw_pp: list[PPoly], seq: pp.Sequence
+) -> tuple[np.ndarray, np.ndarray, list[float], list[float], np.ndarray]:
     # get timings from sequence
     total_duration = sum(seq.block_durations.values())
     t_excitation, fp_excitation, t_refocusing, _ = seq.rf_times()
@@ -365,7 +373,7 @@ class Gmtf:
         1D array of frequency values (Hz) corresponding to the samples in `gmtf`, of length N.
     """
 
-    def __init__(self, gmtf_z: np.ndarray, gmtf_y: np.ndarray, gmtf_x: np.ndarray, frequency: np.ndarray) -> None:
+    def __init__(self, gmtf_x: np.ndarray, gmtf_y: np.ndarray, gmtf_z: np.ndarray, frequency: np.ndarray) -> None:
         """
         Initialize the GMTF container.
 
@@ -526,7 +534,9 @@ class Gmtf:
         fig.tight_layout()
         plt.show()
 
-    def correct_gradients(self, seq_file: str | Path, freq_threshold: float | None = None) -> np.ndarray:
+    def correct_gradients(
+        self, seq_file_or_object: str | Path | pp.Sequence, freq_threshold: float | None = None
+    ) -> np.ndarray:
         """
         Apply GMTF-based correction to the gradient waveforms in a Pulseq sequence file, and output new trajectory.
 
@@ -542,13 +552,17 @@ class Gmtf:
         -------
             Corrected trajectory.
         """
+        if isinstance(seq_file_or_object, pp.Sequence):
+            seq = seq_file_or_object
+        else:
+            seq = pp.Sequence()
+            seq.read(str(seq_file_or_object))
+
         if freq_threshold:
             print('Not implemented')
-        gradient_waveform_corrected = apply_gmtf_to_sequence(seq_file, self)
+        gradient_waveform_corrected = apply_gmtf_to_sequence(seq, self)
         gradient_waveform_pp_corrected_blocks = convert_waveforms_to_ppoly(gradient_waveform_corrected)
 
-        seq = pp.Sequence()
-        seq.read(seq_file)
         k_traj_adc, _k_traj, _t_excitation, _t_refocusing, _t_adc = calc_kspace_from_grad_waveforms(
             gradient_waveform_pp_corrected_blocks, seq
         )
