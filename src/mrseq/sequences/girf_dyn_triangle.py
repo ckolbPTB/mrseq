@@ -79,7 +79,7 @@ def girf_triangle_kernel(
     seq = pp.Sequence(system=system)
 
     # Create and set sinc pulse parameters
-    rf, gz, gzr = pp.make_sinc_pulse(
+    rf, gsl, gsl_r = pp.make_sinc_pulse(
         flip_angle=rf_flip_angle / 180 * np.pi,
         delay=system.rf_dead_time,
         duration=rf_duration,
@@ -125,13 +125,13 @@ def girf_triangle_kernel(
                         amp = amp_fac * system.max_slew * rise_time_val
 
                         # Set RF frequency offset for current slice
-                        rf.freq_offset = gz.amplitude * slice_pos_val
-                        gz.channel = grad_channel
-                        gzr.channel = grad_channel
+                        rf.freq_offset = gsl.amplitude * slice_pos_val
+                        gsl.channel = grad_channel
+                        gsl_r.channel = grad_channel
 
                         # Add RF pulse with slice selection
-                        seq.add_block(rf, gz, avg_label, seg_label, grad_label, slice_label, amp_fac_label)
-                        seq.add_block(gzr)
+                        seq.add_block(rf, gsl, avg_label, seg_label, grad_label, slice_label, amp_fac_label)
+                        seq.add_block(gsl_r)
 
                         # Add eddy current compensation delay
                         seq.add_block(pp.make_delay(eddy_current_delay))
