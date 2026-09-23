@@ -7,8 +7,6 @@ from mrseq.utils.Gmtf import Gmtf
 from mrseq.utils.Gmtf import build_input_triangles
 from mrseq.utils.Gmtf import calc_kspace_from_grad_waveforms
 from mrseq.utils.Gmtf import convert_waveforms_to_ppoly
-from mrseq.utils.Gmtf import phase_to_gradient
-from mrseq.utils.Gmtf import unwrap_phase_difference
 
 
 def create_test_sequence() -> tuple[pp.Sequence, np.ndarray, float]:
@@ -38,43 +36,6 @@ def create_test_sequence() -> tuple[pp.Sequence, np.ndarray, float]:
     seq.add_block(gx, adc)
     k_traj_adc = seq.calculate_kspace()[0]
     return seq, k_traj_adc, adc.dwell
-
-
-def test_unwrap_phase_difference_removes_2pi_jumps():
-    """Unwrap linearly increasing phase."""
-    n = 200
-    true_phase = np.linspace(0, 20 * np.pi, n)
-    signal0 = np.exp(1j * true_phase)
-    signal1 = np.zeros(n)
-    data = np.stack([signal0, signal1])[None, :, None, None, :]
-    result = unwrap_phase_difference(data)
-    # Unwrapped result should have no jump > pi between consecutive samples
-    assert np.all(np.abs(np.diff(result.squeeze())) < np.pi + 1e-6)
-    # And should approximately recover the linear ramp (up to a constant offset)
-    np.testing.assert_allclose(np.diff(result.squeeze()), np.diff(true_phase), atol=1e-3)
-
-
-def test_unwrap_phase_difference_known_constant_offset():
-    """Recover constant offset between two phase signlas."""
-    n = 50
-    offset = 1.3
-    signal0 = np.exp(1j * offset) * np.ones(n)
-    signal1 = np.ones(n)
-    data = np.stack([signal0, signal1])[None, :, None, None, :]
-    result = unwrap_phase_difference(data)
-    np.testing.assert_allclose(result, offset, atol=1e-10)
-
-
-def test_phase_to_gradient_known_linear_ramp():
-    """A known linear phase ramp should produce a known constant gradient."""
-    n = 100
-    slope = 0.05  # rad per sample
-    phase_mean = np.tile(slope * np.arange(n), (3, 5, 1))
-    phase_std = np.zeros((3, 5, n))
-    slice_pos, gamma, dwell_time = 0.01, 2.675e8, 1e-6
-    grad_mean, _ = phase_to_gradient(phase_mean, phase_std, slice_pos, gamma, dwell_time)
-    expected = slope / (slice_pos * gamma * dwell_time)
-    np.testing.assert_allclose(grad_mean, expected, rtol=1e-10)
 
 
 def test_build_input_triangles_peak_amplitude():

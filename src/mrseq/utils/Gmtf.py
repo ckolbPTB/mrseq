@@ -12,26 +12,6 @@ from pypulseq import eps
 from scipy.interpolate import PPoly
 
 
-def unwrap_phase_difference(data: np.ndarray) -> np.ndarray:
-    """Return doubly-unwrapped phase of polarity[0] - polarity[1].
-
-    Input shape:  ``(n_avg, 2, n_axes, n_rise, n_samples)``
-    Output shape: ``(n_avg, n_axes, n_rise, n_samples)``
-    """
-    diff = np.angle(data[:, 0, ...]) - np.angle(data[:, 1, ...])
-    return np.unwrap(np.unwrap(diff))
-
-
-def phase_to_gradient(
-    phase_mean: np.ndarray, phase_std: np.ndarray, slice_pos: float, gamma: float, dwell_time: float
-) -> tuple[np.ndarray, np.ndarray]:
-    """Convert unwrapped-phase arrays to gradient waveforms via finite difference."""
-    scale = slice_pos * gamma * dwell_time
-    grad_mean = np.diff(phase_mean, axis=-1) / scale
-    grad_std = np.diff(phase_std, axis=-1) / scale
-    return grad_mean, grad_std
-
-
 def build_input_triangles(
     rise_times: Sequence[float],
     slew_rate: float,
@@ -41,6 +21,21 @@ def build_input_triangles(
     n_samples: int,
 ) -> np.ndarray:
     """Build ideal triangular input waveforms.
+
+    Parameters
+    ----------
+    rise_times
+        Rise times of the triangular waveforms.
+    slew_rate
+        Slew rate used to construct the ramps.
+    g_delay
+        Gradient delay.
+    enumerate_coeff
+        Coefficients used to enumerate/scale the triangular waveforms.
+    dwell_time
+        Time between successive samples.
+    n_samples
+        Number of samples per waveform.
 
     Returns
     -------
@@ -61,32 +56,23 @@ def build_input_triangles(
     return triangles
 
 
-def apply_gmtf_to_sequence(seq_file_or_object: str | Path | pp.Sequence, gmtf: 'Gmtf') -> list[np.ndarray]:
+def _apply_gmtf_to_gradient_waveform(gradient_waveform: list[np.ndarray], gmtf: 'Gmtf'):
     """
-    Apply Gmtf correction to all gradient waveforms in sequence and return corrected gradient waveform.
+    Apply Gmtf correction to a gradient waveform and return corrected gradient waveform.
 
     Parameters
     ----------
-        seq_file
-            Path to the Pulseq (.seq) file describing the nominal gradient waveforms that were played out during the
-            measurement.
-        gmtf
-            Gmtf instance
+    gradient_waveform
+        Input gradient waveform
+    gmtf
+        Gmtf instance
 
     Returns
     -------
         Corrected gradient waveform
     """
-    if isinstance(seq_file_or_object, pp.Sequence):
-        seq = seq_file_or_object
-    else:
-        seq = pp.Sequence()
-        seq.read(str(seq_file_or_object))
-
-    nominal_gradient_waveform = seq.waveforms()
-
     gradient_waveform_corrected = []
-    for grad_idx, grad in enumerate(nominal_gradient_waveform):
+    for grad_idx, grad in enumerate(gradient_waveform):
         if len(grad[1]):
             pad_factor = 2
 
@@ -129,6 +115,33 @@ def apply_gmtf_to_sequence(seq_file_or_object: str | Path | pp.Sequence, gmtf: '
             gradient_waveform_corrected.append(grad)
 
     return gradient_waveform_corrected
+
+
+def apply_gmtf_to_sequence(seq_file_or_object: str | Path | pp.Sequence, gmtf: 'Gmtf') -> list[np.ndarray]:
+    """
+    Apply Gmtf correction to all gradient waveforms in sequence and return corrected gradient waveform.
+
+    Parameters
+    ----------
+    seq_file_or_object
+        Path to the Pulseq (.seq) file or pulseq sequence object describing the nominal gradient waveforms that were
+        played out during the measurement.
+    gmtf
+        Gmtf instance
+
+    Returns
+    -------
+        Corrected gradient waveform
+    """
+    if isinstance(seq_file_or_object, pp.Sequence):
+        seq = seq_file_or_object
+    else:
+        seq = pp.Sequence()
+        seq.read(str(seq_file_or_object))
+
+    nominal_gradient_waveform = seq.waveforms()
+
+    return _apply_gmtf_to_gradient_waveform(nominal_gradient_waveform, gmtf)
 
 
 def convert_waveforms_to_ppoly(gw_data: list[np.ndarray]) -> Sequence[PPoly | None]:
@@ -474,10 +487,13 @@ class Gmtf:
         g_amplitude_coeff = sequence.get_definition('GradAmplitudeCoeff')
 
         # Unwrape phase
-        phase = unwrap_phase_difference(kdata_single_coil)
-        phase_mean = phase.mean(axis=0)
-        phase_std = phase.std(axis=0)
-        grad_output_mean, _grad_output_std = phase_to_gradient(phase_mean, phase_std, slice_pos, gamma, dwell_time)
+        phase_difference = np.angle(kdata_single_coil[:, 0, ...]) - np.angle(kdata_single_coil[:, 1, ...])
+        phase_difference = np.unwrap(np.unwrap(phase_difference))
+        phase_mean = phase_difference.mean(axis=0)
+
+        # Calculate gradient from phase
+        scale = slice_pos * gamma * dwell_time
+        grad_output_mean = np.diff(phase_mean, axis=-1) / scale
 
         # TODO
         print('FXINING UNEXPLAINED SHIFT')
