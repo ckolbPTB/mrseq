@@ -127,6 +127,8 @@ def test_gmtf_construction():
     np.testing.assert_array_equal(gmtf.gmtf[0], gmtf_x)
     np.testing.assert_array_equal(gmtf.gmtf[1], gmtf_y)
     np.testing.assert_array_equal(gmtf.gmtf[2], gmtf_z)
+    assert gmtf.grad_output is None
+    assert gmtf.grad_input is None
 
 
 @pytest.mark.parametrize('scaling', (1, 0.8, 0.5))

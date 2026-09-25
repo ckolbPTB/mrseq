@@ -56,7 +56,9 @@ def build_input_triangles(
     return triangles
 
 
-def _apply_gmtf_to_gradient_waveform(gradient_waveform: list[np.ndarray], gmtf: 'Gmtf'):
+def _apply_gmtf_to_gradient_waveform(
+    gradient_waveform: list[np.ndarray], gmtf: np.ndarray, frequency: np.ndarray
+) -> list[np.ndarray]:
     """
     Apply Gmtf correction to a gradient waveform and return corrected gradient waveform.
 
@@ -65,12 +67,25 @@ def _apply_gmtf_to_gradient_waveform(gradient_waveform: list[np.ndarray], gmtf: 
     gradient_waveform
         Input gradient waveform
     gmtf
-        Gmtf instance
+        Complex-valued array containing the GMTF for the x-axis, y-axis and z-axis, of shape (3, N).
+    frequency
+        1D real-valued array of frequency values (Hz), of length N, corresponding to the frequency axis of  `gmtf`
+
+    Raises
+    ------
+    ValueError
+        If `gmtf` and `freq` do not have the same length.
 
     Returns
     -------
         Corrected gradient waveform
     """
+    if gmtf.shape[-1] != frequency.shape[0]:
+        raise ValueError(
+            f'gmtf and freq must have the same shape along the last dimension but, got: {gmtf.shape[-1]} ',
+            f'and {frequency.shape[0]}.',
+        )
+
     gradient_waveform_corrected = []
     for grad_idx, grad in enumerate(gradient_waveform):
         if len(grad[1]):
@@ -79,7 +94,7 @@ def _apply_gmtf_to_gradient_waveform(gradient_waveform: list[np.ndarray], gmtf: 
             input_gradient_time = grad[0]
             input_gradient = grad[1]
 
-            dt = 1 / gmtf.frequency[-1] / 2
+            dt = 1 / frequency[-1] / 2
 
             # Build a uniform time grid covering the original (non-uniform) signal
             n = int(np.ceil((input_gradient_time[-1] - input_gradient_time[0]) / dt)) + 1
@@ -95,9 +110,9 @@ def _apply_gmtf_to_gradient_waveform(gradient_waveform: list[np.ndarray], gmtf: 
             signal_freq = np.fft.fftfreq(n_padded, d=dt)
 
             # Sort gmtf by frequency so interpolation x-values are ascending
-            sort_idx = np.argsort(gmtf.frequency)
-            gmtf_frequency_sorted = gmtf.frequency[sort_idx]
-            gmtf_sorted = gmtf.gmtf[grad_idx, sort_idx]
+            sort_idx = np.argsort(frequency)
+            gmtf_frequency_sorted = frequency[sort_idx]
+            gmtf_sorted = gmtf[grad_idx, sort_idx]
 
             # Interpolate GMTF (real and imaginary parts) onto the padded signal's frequency grid
             gmtf_interp_real = np.interp(signal_freq, gmtf_frequency_sorted, gmtf_sorted.real, left=0, right=0)
@@ -127,7 +142,7 @@ def apply_gmtf_to_sequence(seq_file_or_object: str | Path | pp.Sequence, gmtf: '
         Path to the Pulseq (.seq) file or pulseq sequence object describing the nominal gradient waveforms that were
         played out during the measurement.
     gmtf
-        Gmtf instance
+        Gmtf object
 
     Returns
     -------
@@ -141,7 +156,7 @@ def apply_gmtf_to_sequence(seq_file_or_object: str | Path | pp.Sequence, gmtf: '
 
     nominal_gradient_waveform = seq.waveforms()
 
-    return _apply_gmtf_to_gradient_waveform(nominal_gradient_waveform, gmtf)
+    return _apply_gmtf_to_gradient_waveform(nominal_gradient_waveform, gmtf.gmtf, gmtf.frequency)
 
 
 def convert_waveforms_to_ppoly(gw_data: list[np.ndarray]) -> Sequence[PPoly | None]:
@@ -396,7 +411,13 @@ class Gmtf:
         with shape (3, N), where N is the number of frequency samples.
     frequency
         1D array of frequency values (Hz) corresponding to the samples in `gmtf`, of length N.
+    grad_input
+        Input gradient triangular waveforms with shape `(n_rise_times n_adc_samples)` (read only)
+    grad_output
+        Measured output gradient waveforms with shape `(n_rise_times n_adc_samples)` (read only)
     """
+
+    __slots__ = ('_grad_input', '_grad_output', 'frequency', 'gmtf')
 
     def __init__(self, gmtf_x: np.ndarray, gmtf_y: np.ndarray, gmtf_z: np.ndarray, frequency: np.ndarray) -> None:
         """
@@ -435,6 +456,18 @@ class Gmtf:
 
         self.gmtf = np.stack((gmtf_x, gmtf_y, gmtf_z))
         self.frequency = frequency
+        self._grad_input: np.ndarray | None = None
+        self._grad_output: np.ndarray | None = None
+
+    @property
+    def grad_input(self):
+        """Nominal gradient triangles."""
+        return self._grad_input
+
+    @property
+    def grad_output(self):
+        """Measured gradient waveforms."""
+        return self._grad_output
 
     @classmethod
     def compute_gmtf(cls, mrd_file: str | Path, seq_file: str | Path) -> 'Gmtf':
@@ -494,11 +527,8 @@ class Gmtf:
         # Calculate gradient from phase
         scale = slice_pos * gamma * dwell_time
         grad_output_mean = np.diff(phase_mean, axis=-1) / scale
-
-        # TODO
-        print('FXINING UNEXPLAINED SHIFT')
-        output_delay = 1
-        grad_output_mean = np.roll(grad_output_mean, output_delay, axis=-1)
+        # Shift by one to account for shift due to difference calculation
+        grad_output_mean = np.roll(grad_output_mean, 1, axis=-1)
 
         # Calculate ideal triangles
         grad_input = build_input_triangles(
@@ -511,7 +541,10 @@ class Gmtf:
 
         gmtf = estimate_gmtf(grad_input, grad_output_mean)
         frequency = (1.0 / dwell_time) * np.arange(-gmtf.shape[-1] // 2, gmtf.shape[-1] // 2) / (gmtf.shape[-1])
-        return Gmtf(gmtf_x=gmtf[0, :], gmtf_y=gmtf[1, :], gmtf_z=gmtf[2, :], frequency=frequency)
+        gmtf_obj = Gmtf(gmtf_x=gmtf[0, :], gmtf_y=gmtf[1, :], gmtf_z=gmtf[2, :], frequency=frequency)
+        gmtf_obj._grad_output = grad_output_mean
+        gmtf_obj._grad_input = grad_input
+        return gmtf_obj
 
     def plot(
         self,
