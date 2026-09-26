@@ -415,9 +415,11 @@ class Gmtf:
         Input gradient triangular waveforms with shape `(n_rise_times n_adc_samples)` (read only)
     grad_output
         Measured output gradient waveforms with shape `(n_rise_times n_adc_samples)` (read only)
+    grad_time
+        Time vector for gradient input and output with shape `(n_adc_samples)`(read only)
     """
 
-    __slots__ = ('_grad_input', '_grad_output', 'frequency', 'gmtf')
+    __slots__ = ('_grad_input', '_grad_output', '_grad_time', 'frequency', 'gmtf')
 
     def __init__(self, gmtf_x: np.ndarray, gmtf_y: np.ndarray, gmtf_z: np.ndarray, frequency: np.ndarray) -> None:
         """
@@ -458,6 +460,7 @@ class Gmtf:
         self.frequency = frequency
         self._grad_input: np.ndarray | None = None
         self._grad_output: np.ndarray | None = None
+        self._grad_time: np.ndarray | None = None
 
     @property
     def grad_input(self):
@@ -469,8 +472,13 @@ class Gmtf:
         """Measured gradient waveforms."""
         return self._grad_output
 
+    @property
+    def grad_time(self):
+        """Time vector for gradient input and output."""
+        return self._grad_time
+
     @classmethod
-    def compute_gmtf(cls, mrd_file: str | Path, seq_file: str | Path) -> 'Gmtf':
+    def compute_gmtf(cls, mrd_file: str | Path, seq_file: str | Path, triangles_idx: Sequence[int]) -> 'Gmtf':
         """
         Compute the GMTF from a measured MRD dataset and the corresponding Pulseq sequence file used to acquire it.
 
@@ -482,6 +490,8 @@ class Gmtf:
         seq_file
             Path to the Pulseq (.seq) file describing the nominal gradient waveforms that were played out during the
             measurement.
+        triangles_idx
+            Index of gradient rise times to use.
 
         Returns
         -------
@@ -506,6 +516,7 @@ class Gmtf:
             ph=int(kdata.header.acq_info.idx.phase.max()) + 1,
         )
         kdata_single_coil = kdata_sorted.compress_coils(n_compressed_coils=1).data.squeeze().numpy()
+        kdata_single_coil = kdata_single_coil[..., triangles_idx, :]
 
         # Get additional information from sequence
         sequence = pp.Sequence()
@@ -514,7 +525,7 @@ class Gmtf:
         dwell_time = sequence.get_definition('DwellTime')
         slice_pos = sequence.get_definition('SlicePos')
         gamma = sequence.system.gamma * 2 * np.pi
-        rise_times = sequence.get_definition('RiseTimes')
+        rise_times = sequence.get_definition('RiseTimes')[triangles_idx]
         slew_rate = sequence.get_definition('SlewRate') / sequence.system.gamma
         g_delay = sequence.get_definition('GradientPreEmphasisDelay')
         g_amplitude_coeff = sequence.get_definition('GradAmplitudeCoeff')
@@ -544,6 +555,7 @@ class Gmtf:
         gmtf_obj = Gmtf(gmtf_x=gmtf[0, :], gmtf_y=gmtf[1, :], gmtf_z=gmtf[2, :], frequency=frequency)
         gmtf_obj._grad_output = grad_output_mean
         gmtf_obj._grad_input = grad_input
+        gmtf_obj._grad_time = np.linspace(0.0, grad_input.shape[-1] * dwell_time, grad_input.shape[-1])
         return gmtf_obj
 
     def plot(
