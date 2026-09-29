@@ -376,7 +376,7 @@ def main(
     # define spoiling
     gz_spoil_duration = 0.8e-3  # duration of spoiler gradient [s]
     gz_spoil_area = 4 / slice_thickness  # area / zeroth gradient moment of spoiler gradient
-    rf_spoiling_phase_increment = 117  # RF spoiling phase increment [°]. Set to 0 for no RF spoiling.
+    rf_spoiling_phase_increment = 84  # RF spoiling phase increment [°]. Set to 0 for no RF spoiling.
 
     # define sequence filename
     filename = f'{Path(__file__).stem}_{int(fov_xy * 1000)}fov_{n_readout}nx_{n_spokes}na'
