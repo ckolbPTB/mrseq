@@ -485,7 +485,7 @@ def main(
     n_readout_with_oversampling = int(n_readout * readout_oversampling * partial_echo_factor)
     # define ADC and gradient timing
     adc_dwell_time = 1.0 / (receiver_bandwidth_per_pixel * n_readout_with_oversampling)
-    gx_pre_duration = 0.8e-3  # duration of readout pre-winder gradient [s]
+    gx_pre_duration = 0.72e-3  # duration of readout pre-winder gradient [s]
     gx_flat_time, adc_dwell_time = find_gx_flat_time_on_adc_raster(
         n_readout_with_oversampling, adc_dwell_time, system.grad_raster_time, system.adc_raster_time
     )
