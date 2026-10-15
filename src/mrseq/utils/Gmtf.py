@@ -478,7 +478,13 @@ class Gmtf:
         return self._grad_time
 
     @classmethod
-    def compute_gmtf(cls, mrd_file: str | Path, seq_file: str | Path, triangles_idx: Sequence[int]) -> 'Gmtf':
+    def compute_gmtf(
+        cls,
+        mrd_file: str | Path,
+        seq_file: str | Path,
+        triangles_idx: Sequence[int],
+        restrict_to_triangles: bool = False,
+    ) -> 'Gmtf':
         """
         Compute the GMTF from a measured MRD dataset and the corresponding Pulseq sequence file used to acquire it.
 
@@ -492,6 +498,8 @@ class Gmtf:
             measurement.
         triangles_idx
             Index of gradient rise times to use.
+        restrict_to_triangles
+            Restrict the ADC samples used for the GIRF estimation to the duration of the triangular gradients
 
         Returns
         -------
@@ -501,19 +509,18 @@ class Gmtf:
         """
         # Load k-space data, sort into correct dimensions and combine to single coil
         kdata = KData.from_file(mrd_file, trajectory=KTrajectoryCartesian())
-        idx = np.lexsort(
-            (
-                kdata.header.acq_info.idx.phase.squeeze(),
-                kdata.header.acq_info.idx.repetition.squeeze(),
-                kdata.header.acq_info.idx.average.squeeze(),
-            )
-        )
+
+        names = ('slice', 'phase', 'repetition', 'average')
+        keys = np.broadcast_arrays(*(np.asarray(getattr(kdata.header.acq_info.idx, name)) for name in names))
+        idx = np.lexsort([key.reshape(-1) for key in keys])
+
         kdata_sorted = kdata[idx.tolist()]
         kdata_sorted = kdata_sorted.rearrange(
-            '(avg rep ph) ... -> avg rep ph ...',
+            '(avg rep ph slice) ... -> avg rep ph slice ...',
             rep=int(kdata.header.acq_info.idx.repetition.max()) + 1,
             avg=int(kdata.header.acq_info.idx.average.max()) + 1,
             ph=int(kdata.header.acq_info.idx.phase.max()) + 1,
+            slice=int(kdata.header.acq_info.idx.slice.max()) + 1,
         )
         kdata_single_coil = kdata_sorted.compress_coils(n_compressed_coils=1).data.squeeze().numpy()
         kdata_single_coil = kdata_single_coil[..., triangles_idx, :]
@@ -535,22 +542,32 @@ class Gmtf:
         phase_difference = np.unwrap(np.unwrap(phase_difference))
         phase_mean = phase_difference.mean(axis=0)
 
+        if len(np.atleast_1d(slice_pos)) == 2:
+            phase_mean = (phase_mean[:, 0] / slice_pos[0] + phase_mean[:, 1] / slice_pos[1]) / 2
+        else:
+            phase_mean /= slice_pos
+
         # Calculate gradient from phase
-        scale = slice_pos * gamma * dwell_time
-        grad_output_mean = np.diff(phase_mean, axis=-1) / scale
+        grad_output_mean = np.diff(phase_mean, axis=-1) / (gamma * dwell_time)
         # Shift by one to account for shift due to difference calculation
         grad_output_mean = np.roll(grad_output_mean, 1, axis=-1)
+        grad_output_mean[..., 0] = 0.0
 
         # Calculate ideal triangles
         grad_input = build_input_triangles(
             rise_times, slew_rate, g_delay, g_amplitude_coeff, dwell_time, grad_output_mean.shape[-1]
         )
 
+        if restrict_to_triangles:
+            n_grad_samples = int(np.ceil((max(rise_times) * 4 + g_delay) / dwell_time))  # *4 instead of *2 for shifts
+        else:
+            n_grad_samples = grad_input.shape[-1]
+
         # Check for any sign flips
         corr = np.sum(grad_input * grad_output_mean)
         grad_output_mean = grad_output_mean if corr >= 0 else grad_output_mean * -1
 
-        gmtf = estimate_gmtf(grad_input, grad_output_mean)
+        gmtf = estimate_gmtf(grad_input[..., :n_grad_samples], grad_output_mean[..., :n_grad_samples])
         frequency = (1.0 / dwell_time) * np.arange(-gmtf.shape[-1] // 2, gmtf.shape[-1] // 2) / (gmtf.shape[-1])
         gmtf_obj = Gmtf(gmtf_x=gmtf[0, :], gmtf_y=gmtf[1, :], gmtf_z=gmtf[2, :], frequency=frequency)
         gmtf_obj._grad_output = grad_output_mean
